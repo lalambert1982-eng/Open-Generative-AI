@@ -123,8 +123,7 @@
     "react-dom": "^19.0.0",
     "react-hot-toast": "^2.4.1",
     "studio": "*",
-    "workflow-builder": "file:./packages/Vibe-Workflow/packages/workflow-builder",
-    "xtend": "^4.0.2"
+    "workflow-builder": "file:./packages/Vibe-Workflow/packages/workflow-builder"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
