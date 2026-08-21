@@ -6,6 +6,14 @@ The web app uses bring-your-own-key authentication. Browser requests send the ke
 
 The Next.js web shell stores API keys in per-tab session storage and migrates/removes its legacy persistent local-storage value. Preventing script injection remains important because any script running in the page can access session storage. The Design Agent's pinned compatibility `token` entry exists only while that studio is mounted and is removed on logout, tab change, or unmount. The Electron app retains its existing local desktop storage until an operating-system credential-vault migration is designed.
 
+## Creator Studio provider gateway
+
+The Anthropic, OpenAI, ElevenLabs, HeyGen, and Runway integrations are server-side only. Configure their credentials as deployment environment variables and protect `/api/creator/*` with a separate `CREATOR_STUDIO_ACCESS_KEY` of at least 32 random characters. The browser stores that access key only in per-tab session storage and sends it in `x-studio-access-key`; it never receives a provider credential.
+
+Creator routes use constant-time access-key comparison, per-action rate limits, fixed upstream hosts, input and output-size limits, provider timeouts, strict ID/URL validation, sanitized error responses, and the content-safety policy below. The provider-status response exposes configuration booleans and model labels only. The default limiter is a per-process backstop; use an external shared limiter before scaling to multiple application instances.
+
+This shared key is appropriate for a private personal deployment. It is not a substitute for user identity, per-user authorization, quotas, or audit logs in a public or multi-user product. See [Creator Studio provider setup](CREATOR_STUDIO.md) for the complete variable list.
+
 ## Upload proxy
 
 Set `UPLOAD_PROXY_TICKET_SECRET` to at least 32 random characters in every deployed environment. Upload signing responses are encrypted into five-minute tickets bound to a hash of the requesting API key. The browser receives the object key but not the storage hostname, policy, signature, or other signing fields.
