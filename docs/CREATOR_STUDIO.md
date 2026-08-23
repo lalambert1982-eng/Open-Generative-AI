@@ -12,20 +12,30 @@ Creator Studio is a private, Runway-inspired workspace that coordinates five spe
 
 All provider credentials are read only by the Next.js server. They are never sent to the browser, returned by the provider-status endpoint, or committed to the repository.
 
-## Configure Vercel
+## Configure GitHub sign-in and Vercel
 
-1. Open the Vercel project.
-2. Go to **Settings → Environment Variables**.
-3. Add each provider variable from the table above. Select the Production, Preview, and Development targets where that provider should be available.
-4. Add `CREATOR_STUDIO_ACCESS_KEY`. Generate a private value of at least 32 characters, for example:
+1. In GitHub, open **Settings → Developer settings → OAuth Apps → New OAuth App**.
+2. Use the exact deployment origin as the homepage URL and the exact callback URL `https://YOUR-HOST/api/auth/github/callback`. Keep callback wildcard matching disabled.
+3. Create a separate OAuth app for Preview and Production. This avoids sharing a callback or secret across environments.
+4. Open the Vercel project and go to **Settings → Environment Variables**.
+5. Add the following authentication variables to the matching environment and branch:
+
+   - `GITHUB_OAUTH_CLIENT_ID`
+   - `GITHUB_OAUTH_CLIENT_SECRET`
+   - `GITHUB_OAUTH_CALLBACK_URL`
+   - `CREATOR_GITHUB_ALLOWED_LOGINS`
+   - `CREATOR_GITHUB_ALLOWED_USER_IDS` (recommended immutable identity pin)
+   - `CREATOR_SESSION_SECRET`
+
+6. Generate `CREATOR_SESSION_SECRET` independently from every provider and OAuth secret:
 
    ```bash
    openssl rand -base64 48
    ```
 
-5. Keep the access key in a password manager. Do not reuse a provider API key for it.
-6. Redeploy the project after saving the variables.
-7. Open `/studio/creator` and enter only `CREATOR_STUDIO_ACCESS_KEY` in the unlock screen.
+7. Add each provider variable from the table above. Select the Production, Preview, and Development targets where that provider should be available.
+8. Redeploy the project after saving the variables.
+9. Open `/studio/creator`, choose **Continue with GitHub**, and authorize only the allowlisted account.
 
 Never paste an API key into a GitHub file, issue, pull request, build log, or browser-side `NEXT_PUBLIC_*` variable. Rotate a credential immediately if it was exposed in any of those places.
 
@@ -33,7 +43,8 @@ Never paste an API key into a GitHub file, issue, pull request, build log, or br
 
 The defaults are listed in `.env.example`:
 
-- `CREATOR_STUDIO_RATE_LIMIT=5` limits each generation action per minute for the shared access key.
+- `CREATOR_SESSION_TTL_SECONDS=28800` limits a signed Studio session to eight hours. The code caps sessions at 24 hours.
+- `CREATOR_STUDIO_RATE_LIMIT=5` limits each generation action per minute for the signed-in GitHub identity.
 - `CREATOR_STUDIO_STATUS_RATE_LIMIT=120` permits provider task polling without relaxing generation limits.
 - `CONTENT_SAFETY_MODE=enforce` blocks the built-in high-risk content classes before any paid provider call. `audit` and `off` remain explicit operator choices.
 - `OPENAI_IMAGE_DEFAULT_QUALITY=low` keeps exploratory image calls less expensive; the UI can request medium or high quality.
@@ -51,8 +62,11 @@ Rate limiting is an abuse guard, not a billing budget. Set spending limits and a
 
 ## Security model
 
-- The browser sends the private Creator Studio access key only to same-origin `/api/creator/*` routes.
+- GitHub authorization uses the web application flow with an unguessable state and PKCE S256 challenge. The callback URL comes only from server configuration.
+- The app requests no repository scope. It exchanges the temporary code server-side, verifies the current GitHub identity, and does not store the GitHub access token.
+- Access is checked against the configured GitHub login and, when configured, the immutable numeric GitHub user ID.
+- The browser receives only a signed, short-lived, HTTP-only, Secure, SameSite session cookie. Provider keys and GitHub tokens never enter browser storage.
 - Server routes use a constant-time comparison, per-action rate limiting, request-size limits, content safety, fixed upstream hosts, strict input validation, timeouts, no-store responses, and sanitized provider errors.
 - Provider-status responses expose only configuration booleans and model labels—not credential values.
-- The access key is stored in browser `sessionStorage`, so closing the tab removes it. The **Lock Creator Studio** button removes it immediately.
-- This is a private shared-key gate, not multi-user identity. Add real account authentication and per-user authorization before opening the deployment to customers or collaborators.
+- Paid generation mutations reject cross-origin requests. **Sign out** expires the Studio session cookie immediately.
+- This is an owner-allowlisted identity gate. Add durable user records, roles, shared rate limiting, audit logs, and provider budgets before opening the deployment to customers or collaborators.

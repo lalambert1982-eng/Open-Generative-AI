@@ -9,18 +9,15 @@ import {
   ExternalLink,
   Film,
   Image as ImageIcon,
-  KeyRound,
   LoaderCircle,
   LockKeyhole,
+  LogOut,
   Mic2,
   Play,
   Send,
-  Sparkles,
   UserRound,
   WandSparkles,
 } from "lucide-react";
-
-const ACCESS_KEY_STORAGE = "creator_studio_access_key";
 
 const TOOLS = [
   {
@@ -160,7 +157,15 @@ function ProviderChip({ provider }) {
   );
 }
 
-function UnlockPanel({ value, onChange, onUnlock, error, loading }) {
+function GithubMark() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="h-[18px] w-[18px] fill-current">
+      <path d="M12 .7a11.5 11.5 0 0 0-3.64 22.4c.58.1.79-.25.79-.56v-2.2c-3.22.7-3.9-1.37-3.9-1.37-.52-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.78 2.72 1.27 3.39.97.1-.75.4-1.27.74-1.56-2.57-.29-5.27-1.29-5.27-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.16 1.18A10.9 10.9 0 0 1 12 6.14c.98 0 1.95.13 2.86.39 2.2-1.49 3.16-1.18 3.16-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.4-2.71 5.38-5.29 5.67.42.36.79 1.07.79 2.16v3.21c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z" />
+    </svg>
+  );
+}
+
+function SignInPanel({ error }) {
   return (
     <div className="flex h-full w-full items-center justify-center bg-[#050506] px-5 py-12">
       <div className="relative w-full max-w-lg overflow-hidden rounded-[28px] border border-white/10 bg-[#0b0b0e] p-7 shadow-[0_30px_100px_rgba(0,0,0,0.65)] sm:p-10">
@@ -171,43 +176,27 @@ function UnlockPanel({ value, onChange, onUnlock, error, loading }) {
             <LockKeyhole size={25} />
           </div>
           <p className="mb-2 text-[11px] font-black uppercase tracking-[0.24em] text-cyan-300/80">Private provider workspace</p>
-          <h2 className="text-3xl font-semibold tracking-[-0.04em] text-white">Unlock Creator Studio</h2>
+          <h2 className="text-3xl font-semibold tracking-[-0.04em] text-white">Sign in to Creator Studio</h2>
           <p className="mt-3 max-w-md text-sm leading-6 text-white/45">
-            Enter the private Creator Studio access key. Your Anthropic, OpenAI, ElevenLabs, HeyGen, and Runway credentials stay on the server.
+            Continue with the authorized GitHub account. Provider credentials remain on the server and are never shared with GitHub or the browser.
           </p>
-
-          <form onSubmit={onUnlock} className="mt-8 space-y-4">
-            <label className="block">
-              <span className="mb-2 block text-[11px] font-bold uppercase tracking-[0.16em] text-white/35">Studio access key</span>
-              <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/35 px-4 focus-within:border-cyan-300/40 focus-within:ring-4 focus-within:ring-cyan-300/[0.06]">
-                <KeyRound size={17} className="text-white/30" />
-                <input
-                  type="password"
-                  value={value}
-                  onChange={(event) => onChange(event.target.value)}
-                  placeholder="Paste the private access key"
-                  autoComplete="off"
-                  className="h-14 min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/20"
-                />
-              </div>
-            </label>
+          <div className="mt-8 space-y-4">
             {error && (
               <div className="flex items-start gap-2 rounded-xl border border-red-400/20 bg-red-400/[0.08] px-3 py-2.5 text-xs leading-5 text-red-200">
                 <CircleAlert size={15} className="mt-0.5 shrink-0" />
                 <span>{error}</span>
               </div>
             )}
-            <button
-              type="submit"
-              disabled={!value.trim() || loading}
-              className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-white px-5 text-sm font-bold text-black transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-35"
+            <a
+              href="/api/auth/github/start?returnTo=/studio/creator"
+              className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-white px-5 text-sm font-bold text-black transition hover:bg-cyan-200"
             >
-              {loading ? <LoaderCircle size={17} className="animate-spin" /> : <Sparkles size={17} />}
-              Unlock workspace
-            </button>
-          </form>
+              <GithubMark />
+              Continue with GitHub
+            </a>
+          </div>
           <p className="mt-5 text-[11px] leading-5 text-white/25">
-            This key is stored only in this browser tab and is different from every provider API key.
+            Access is restricted to the GitHub identity approved by the Studio owner. No repository permission is requested.
           </p>
         </div>
       </div>
@@ -471,16 +460,14 @@ function hasRequiredInput(toolId, draft) {
 }
 
 export default function CreatorStudio({ onGenerationStart, onGenerationEnd, onGenerationComplete, onGenerationError }) {
-  const [accessKey, setAccessKey] = useState("");
-  const [unlockValue, setUnlockValue] = useState("");
+  const [session, setSession] = useState(null);
+  const [authState, setAuthState] = useState("checking");
   const [providers, setProviders] = useState([]);
   const [activeToolId, setActiveToolId] = useState("assistant");
   const [drafts, setDrafts] = useState(INITIAL_DRAFTS);
   const [outputs, setOutputs] = useState({});
-  const [unlocking, setUnlocking] = useState(false);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
-  const [hydrated, setHydrated] = useState(false);
   const objectUrlsRef = useRef(new Set());
   const generationTokenRef = useRef(0);
 
@@ -494,27 +481,28 @@ export default function CreatorStudio({ onGenerationStart, onGenerationEnd, onGe
     [providers],
   );
 
-  const request = useCallback(async (path, options = {}, keyOverride) => {
-    const key = keyOverride || accessKey;
+  const request = useCallback(async (path, options = {}) => {
     const headers = new Headers(options.headers || {});
-    headers.set("x-studio-access-key", key);
     if (options.body && typeof options.body !== "string") {
       headers.set("content-type", "application/json");
     }
     const response = await fetch(`/api/creator/${path}`, {
       ...options,
       headers,
+      credentials: "same-origin",
+      cache: "no-store",
       body: options.body && typeof options.body !== "string" ? JSON.stringify(options.body) : options.body,
     });
     if (response.status === 401) {
-      window.sessionStorage.removeItem(ACCESS_KEY_STORAGE);
-      setAccessKey("");
+      setSession(null);
+      setProviders([]);
+      setAuthState("signed-out");
     }
     return response;
-  }, [accessKey]);
+  }, []);
 
-  const loadProviders = useCallback(async (key) => {
-    const response = await request("providers", {}, key);
+  const loadProviders = useCallback(async () => {
+    const response = await request("providers");
     if (!response.ok) throw new Error(await responseError(response));
     const data = await response.json();
     setProviders(Array.isArray(data.providers) ? data.providers : []);
@@ -522,15 +510,45 @@ export default function CreatorStudio({ onGenerationStart, onGenerationEnd, onGe
   }, [request]);
 
   useEffect(() => {
-    const stored = window.sessionStorage.getItem(ACCESS_KEY_STORAGE) || "";
-    setHydrated(true);
-    if (!stored) return;
-    setAccessKey(stored);
-    loadProviders(stored).catch(() => {
-      window.sessionStorage.removeItem(ACCESS_KEY_STORAGE);
-      setAccessKey("");
-    });
-  }, []);
+    let active = true;
+    const checkSession = async () => {
+      const queryError = new URLSearchParams(window.location.search).get("authError");
+      const authErrors = {
+        github_denied: "GitHub sign-in was cancelled.",
+        invalid_oauth_state: "The GitHub sign-in request expired or could not be verified. Please try again.",
+        github_token_exchange_failed: "GitHub could not complete sign-in. Please try again.",
+        github_scope_rejected: "GitHub returned permissions that Creator Studio does not accept. Review the OAuth app and try again.",
+        github_identity_failed: "GitHub identity verification failed. Please try again.",
+        github_account_not_allowed: "That GitHub account is not authorized for this Creator Studio.",
+        session_creation_failed: "Creator Studio could not create a secure session.",
+      };
+      if (queryError && active) setError(authErrors[queryError] || "GitHub sign-in failed.");
+
+      try {
+        const response = await fetch("/api/auth/session", {
+          credentials: "same-origin",
+          cache: "no-store",
+          headers: { accept: "application/json" },
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!active) return;
+        if (!response.ok || !data.authenticated) {
+          setAuthState("signed-out");
+          if (response.status === 503 && data.error) setError(data.error);
+          return;
+        }
+        setSession(data);
+        setAuthState("signed-in");
+        await loadProviders();
+      } catch (sessionError) {
+        if (!active) return;
+        setAuthState("signed-out");
+        setError(sessionError.message || "Unable to verify the Creator Studio session.");
+      }
+    };
+    checkSession();
+    return () => { active = false; };
+  }, [loadProviders]);
 
   useEffect(() => () => {
     generationTokenRef.current += 1;
@@ -538,29 +556,23 @@ export default function CreatorStudio({ onGenerationStart, onGenerationEnd, onGe
     objectUrlsRef.current.clear();
   }, []);
 
-  const handleUnlock = async (event) => {
-    event.preventDefault();
-    if (!unlockValue.trim() || unlocking) return;
-    setUnlocking(true);
-    setError("");
-    try {
-      await loadProviders(unlockValue.trim());
-      window.sessionStorage.setItem(ACCESS_KEY_STORAGE, unlockValue.trim());
-      setAccessKey(unlockValue.trim());
-      setUnlockValue("");
-    } catch (unlockError) {
-      setError(unlockError.message || "Unable to unlock Creator Studio.");
-    } finally {
-      setUnlocking(false);
-    }
-  };
-
-  const lockStudio = () => {
+  const signOut = async () => {
     generationTokenRef.current += 1;
-    window.sessionStorage.removeItem(ACCESS_KEY_STORAGE);
-    setAccessKey("");
-    setProviders([]);
-    setError("");
+    try {
+      const response = await fetch("/api/auth/logout", {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: { "x-creator-action": "logout" },
+      });
+      if (!response.ok) throw new Error("Unable to sign out securely.");
+      setSession(null);
+      setProviders([]);
+      setAuthState("signed-out");
+      setError("");
+    } catch (logoutError) {
+      setError(logoutError.message || "Unable to sign out securely.");
+    }
   };
 
   const updateDraft = (field, value) => {
@@ -660,9 +672,15 @@ export default function CreatorStudio({ onGenerationStart, onGenerationEnd, onGe
     }
   };
 
-  if (!hydrated) return <div className="h-full w-full bg-[#050506]" />;
-  if (!accessKey) {
-    return <UnlockPanel value={unlockValue} onChange={setUnlockValue} onUnlock={handleUnlock} error={error} loading={unlocking} />;
+  if (authState === "checking") {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-[#050506] text-cyan-300">
+        <LoaderCircle size={28} className="animate-spin" aria-label="Checking Creator Studio session" />
+      </div>
+    );
+  }
+  if (authState !== "signed-in" || !session) {
+    return <SignInPanel error={error} />;
   }
 
   return (
@@ -684,8 +702,9 @@ export default function CreatorStudio({ onGenerationStart, onGenerationEnd, onGe
           <div className="hidden items-center gap-2 lg:flex">
             {providers.map((provider) => <ProviderChip key={provider.id} provider={provider} />)}
           </div>
-          <button type="button" onClick={lockStudio} title="Lock Creator Studio" className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.04] text-white/45 transition hover:bg-white/[0.09] hover:text-white">
-            <LockKeyhole size={16} />
+          <span className="hidden text-[10px] font-semibold text-white/35 sm:inline">@{session.user?.login}</span>
+          <button type="button" onClick={signOut} title="Sign out of Creator Studio" className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.04] text-white/45 transition hover:bg-white/[0.09] hover:text-white">
+            <LogOut size={16} />
           </button>
         </div>
       </header>

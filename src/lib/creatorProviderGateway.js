@@ -1,6 +1,7 @@
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 
 import { evaluateJsonSafety } from './contentSafety.js';
+import { authenticateCreatorRequest, isSameOriginMutation } from './creatorAuth.js';
 import { checkRateLimit } from './rateLimit.js';
 
 const DEFAULT_REQUEST_LIMIT = 30;
@@ -63,23 +64,6 @@ function normalizedSecret(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
 
-function secretDigest(value) {
-    return createHash('sha256').update(String(value || ''), 'utf8').digest();
-}
-
-export function constantTimeSecretMatch(provided, expected) {
-    if (!configuredSecret(provided) || !configuredSecret(expected)) return false;
-    return timingSafeEqual(secretDigest(provided), secretDigest(expected));
-}
-
-function requestAccessKey(request) {
-    const value = request?.headers?.get('x-studio-access-key');
-    if (typeof value !== 'string') return '';
-    const normalized = value.trim();
-    if (normalized.length > 4096 || /[\r\n]/.test(normalized)) return '';
-    return normalized;
-}
-
 function rateLimitValue(env, name, fallback, maximum) {
     return Math.round(boundedNumber(env[name], fallback, 1, maximum));
 }
@@ -89,17 +73,20 @@ export function authorizeCreatorRequest(request, {
     action = 'request',
     statusRequest = false,
 } = {}) {
-    const expected = normalizedSecret(env.CREATOR_STUDIO_ACCESS_KEY);
-    if (expected.length < 32) {
+    const authentication = authenticateCreatorRequest(request, { env });
+    if (authentication.configurationError) {
         return {
-            response: creatorJson({ error: 'Creator Studio is not configured securely.' }, 503),
+            response: creatorJson({ error: authentication.configurationError }, 503),
         };
     }
-
-    const provided = requestAccessKey(request);
-    if (!constantTimeSecretMatch(provided, expected)) {
+    if (!authentication.valid) {
         return {
-            response: creatorJson({ error: 'Unauthorized: a valid Creator Studio access key is required.' }, 401),
+            response: creatorJson({ error: 'Unauthorized: GitHub sign-in is required.' }, 401),
+        };
+    }
+    if (!isSameOriginMutation(request)) {
+        return {
+            response: creatorJson({ error: 'Cross-origin Creator Studio request rejected.' }, 403),
         };
     }
 
@@ -112,8 +99,7 @@ export function authorizeCreatorRequest(request, {
         DEFAULT_WINDOW_MS,
         60 * 60 * 1000,
     );
-    const keyFingerprint = secretDigest(provided).toString('hex').slice(0, 24);
-    const rate = checkRateLimit(`creator:${keyFingerprint}:${action}`, { limit, windowMs });
+    const rate = checkRateLimit(`creator:github:${authentication.user.id}:${action}`, { limit, windowMs });
     if (!rate.allowed) {
         return {
             response: creatorJson(
@@ -124,7 +110,7 @@ export function authorizeCreatorRequest(request, {
         };
     }
 
-    return { accessKeyFingerprint: keyFingerprint };
+    return { user: authentication.user };
 }
 
 async function parseCreatorJson(request, { env = process.env } = {}) {
