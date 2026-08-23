@@ -45,6 +45,7 @@ test('Creator Studio uses GitHub identity sessions instead of a browser-readable
   const auth = await source('src/lib/creatorAuth.js');
   const oauthStart = await source('app/api/auth/github/start/route.js');
   const oauthCallback = await source('app/api/auth/github/callback/route.js');
+  const workflowStudio = await source('packages/studio/src/components/WorkflowStudio.jsx');
 
   assert.equal(creator.includes('creator_studio_access_key'), false);
   assert.equal(creator.includes('x-studio-access-key'), false);
@@ -65,4 +66,5 @@ test('Creator Studio uses GitHub identity sessions instead of a browser-readable
   );
   assert.equal(oauthCallback.includes('createCreatorSession'), true);
   assert.equal(oauthCallback.includes('response.cookies.set'), true);
+  assert.equal(workflowStudio.includes('wl_workflow_token'), false);
 });
