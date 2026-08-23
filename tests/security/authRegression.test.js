@@ -59,7 +59,10 @@ test('Creator Studio uses GitHub identity sessions instead of a browser-readable
   assert.equal(oauthStart.includes("authorizeUrl.searchParams.set('state'"), true);
   assert.equal(oauthStart.includes("authorizeUrl.searchParams.set('scope', 'offline_access')"), true);
   assert.equal(oauthStart.includes('repo'), false);
-  assert.equal(oauthCallback.includes('https://api.github.com/user'), true);
+  assert.match(
+    oauthCallback,
+    /githubJson\(\s*['"]https:\/\/api\.github\.com\/user['"]\s*,/,
+  );
   assert.equal(oauthCallback.includes('createCreatorSession'), true);
   assert.equal(oauthCallback.includes('response.cookies.set'), true);
 });
