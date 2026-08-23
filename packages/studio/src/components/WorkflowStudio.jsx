@@ -271,10 +271,9 @@ export default function WorkflowStudio({
             data: { nodes: [] },
           };
           const response = await createWorkflow(apiKey, payload);
-          // Route to /workflow/[id] so useParams().id works in the builder library.
-          // That page has no white-label session of its own, so hand off our token
-          // via sessionStorage — it reads "wl_workflow_token" on mount.
-          if (apiKey) sessionStorage.setItem("wl_workflow_token", apiKey);
+          // StandaloneShell keeps the session-scoped BYOK credential in memory
+          // across this same-origin route transition; do not duplicate it under
+          // another browser-storage key.
           router.push(`/workflow/${response.workflow_id}/builder`);
           return;
         }
@@ -494,7 +493,6 @@ export default function WorkflowStudio({
                     onClick={() => {
                         setActiveSubTab("builder");
                         if (selectedWorkflow?.id) {
-                          if (apiKey) sessionStorage.setItem("wl_workflow_token", apiKey);
                           router.push(`/workflow/${selectedWorkflow.id}/builder`);
                         }
                     }}
@@ -920,93 +918,3 @@ export default function WorkflowStudio({
               }`}
             >
               My Workflows
-            </button>
-            <button
-              onClick={() => setActiveMainTab("published")}
-              className={`px-6 py-4 text-xs font-black uppercase tracking-[0.2em] transition-all border-b-2 ${
-                activeMainTab === "published"
-                  ? "text-[#22d3ee] border-[#22d3ee]"
-                  : "text-white/30 border-transparent hover:text-white"
-              }`}
-            >
-              Community
-            </button>
-          </div>
-        </div>
-
-        {loading ? (
-          <div className="py-20 flex items-center justify-center">
-            <div className="w-10 h-10 border-4 border-white/5 border-t-[#22d3ee] rounded-full animate-spin" />
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-6">
-            {workflows.map((wf) => (
-              <WorkflowCard
-                key={wf.id}
-                workflow={wf}
-                onClick={handleSelectWorkflow}
-                activeTab={activeMainTab}
-                onRename={(wf) => {
-                   setRenamingWorkflow(wf);
-                   setNewWorkflowName(wf.name);
-                }}
-                onDelete={handleDeleteWorkflow}
-              />
-            ))}
-            {!loading && workflows.length === 0 && (
-              <div className="col-span-full py-24 text-center border-2 border-dashed border-white/5 rounded-2xl bg-white/[0.02]">
-                <div className="text-white/20 text-sm font-medium italic">
-                  No workflows found in this section.
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Rename Modal */}
-      {renamingWorkflow && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => setRenamingWorkflow(null)} />
-          <form 
-            onSubmit={handleRenameWorkflow}
-            className="relative w-full max-w-sm bg-[#0a0a0a] border border-white/10 rounded-2xl p-8 shadow-2xl animate-in fade-in zoom-in duration-300"
-          >
-            <h3 className="text-xl font-bold text-white mb-2">Rename Workflow</h3>
-            <p className="text-white/40 text-sm mb-6">Enter a new descriptive name for your pipeline.</p>
-            
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-[#22d3ee] uppercase tracking-widest">Workflow Name</label>
-                <input
-                  autoFocus
-                  type="text"
-                  value={newWorkflowName}
-                  onChange={(e) => setNewWorkflowName(e.target.value)}
-                  placeholder="e.g. Cinematic Video Flow"
-                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#22d3ee]/50 transition-colors"
-                />
-              </div>
-              
-              <div className="flex gap-3 pt-4">
-                <button
-                  type="button"
-                  onClick={() => setRenamingWorkflow(null)}
-                  className="flex-1 px-4 py-3 text-xs font-black text-white/40 uppercase tracking-widest hover:text-white transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 bg-[#22d3ee] text-black px-4 py-3 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-white transition-all transform hover:scale-105 active:scale-95"
-                >
-                  Save Name
-                </button>
-              </div>
-            </div>
-          </form>
-        </div>
-      )}
-    </div>
-  );
-}
