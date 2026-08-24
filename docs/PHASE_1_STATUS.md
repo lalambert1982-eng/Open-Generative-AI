@@ -23,7 +23,10 @@ Configuration is not implementation. A provider with a missing API key remains *
 | Production deployment | Ready |
 | Production URL | `https://open-generative-ai-lemon.vercel.app` |
 | Current reconciliation branch | `feature/heygen-digital-twin` |
-| Reconciliation deployment | Not deployed |
+| Reconciliation commit | `487e3d9649f2fd00baa51da19154acab961c5c55` |
+| Reconciliation deployment | Ready (Preview) |
+| Preview deployment | `noPTDJVN5W7E5QQFFAML8v1PMnZj` |
+| Stable Preview URL | `https://open-generative-ai-git-feat-84fb6c-lalambert1982-7239s-projects.vercel.app` |
 
 The production commit contains private YouTube publishing from PR #5. The reconciliation branch also contains the completed Greg Digital Twin adapter, its tests, and the full Phase 1 tool registry; those branch changes must still be reviewed, merged, and deployed before they become production state.
 
@@ -37,7 +40,7 @@ The production commit contains private YouTube publishing from PR #5. The reconc
 | #4 | Secure multi-provider Creator Studio | `4853f9e76632ea48f07f805ea1b325762f22906d` | Merged |
 | #5 | Secure private YouTube publishing | `b7a1722c43f4d3b85de1929e4202c9fd18085e8b` | Merged |
 
-Vercel shows the current Production deployment as Ready. Ready Preview deployments also exist for the prior Creator Studio and YouTube branches. There is not yet a Preview deployment for `feature/heygen-digital-twin`.
+Vercel shows both the current Production deployment and the current `feature/heygen-digital-twin` Preview deployment as Ready. The stable Preview alias uses the branch-specific GitHub OAuth callback and the current reconciliation commit.
 
 ## Existing capabilities
 
@@ -71,16 +74,16 @@ Vercel shows the current Production deployment as Ready. Ready Preview deploymen
 
 | Integration | Code Built | Preview Configured | Production Configured | Real Test Passed | Production Ready |
 |---|---|---|---|---|---|
-| GitHub Auth | Built | Configured* | Configured | Test pending | No |
+| GitHub Auth | Built | Configured | Configured | Test passed (Preview) | No |
 | Anthropic | Built | Missing | Missing | Test pending | No |
-| OpenAI Images | Built | Missing | Missing | Test pending | No |
+| OpenAI Images | Built | Configured | Configured | Test pending | No |
 | ElevenLabs | Built | Missing | Configured | Test pending | No |
 | HeyGen | Built | Missing | Missing | Test pending | No |
 | Runway | Built | Missing | Missing | Test pending | No |
 | YouTube OAuth | Built | Missing | Configured | Test pending | No |
 | Vercel Blob | Built | Configured | Configured | Test pending | No |
 
-\* Preview GitHub variables are restricted to `feature/multi-provider-creator-studio`. They do not configure the current `feature/heygen-digital-twin` branch. `CREATOR_GITHUB_ALLOWED_USER_IDS` is present for that prior Preview branch; the login allowlist is optional when the immutable user-ID allowlist is configured.
+Preview GitHub variables are restricted to `feature/heygen-digital-twin`. The OAuth app has the stable Preview callback registered without wildcard matching, and an authenticated owner session was completed successfully on 2026-08-24.
 
 ### Configuration evidence
 
@@ -89,6 +92,7 @@ Only variable names and configuration state are recorded here. No credential val
 #### Production configured
 
 - GitHub Auth: `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `GITHUB_OAUTH_CALLBACK_URL`, `CREATOR_GITHUB_ALLOWED_LOGINS`, `CREATOR_GITHUB_ALLOWED_USER_IDS`, `CREATOR_SESSION_SECRET`
+- OpenAI Images: `OPENAI_API_KEY`
 - ElevenLabs: `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`
 - YouTube OAuth: `YOUTUBE_OAUTH_CLIENT_ID`, `YOUTUBE_OAUTH_CLIENT_SECRET`, `YOUTUBE_OAUTH_CALLBACK_URL`, `YOUTUBE_TOKEN_ENCRYPTION_KEY`
 - Vercel Blob: `BLOB_READ_WRITE_TOKEN` (with a connected Blob store)
@@ -96,7 +100,6 @@ Only variable names and configuration state are recorded here. No credential val
 #### Production missing
 
 - `ANTHROPIC_API_KEY`
-- `OPENAI_API_KEY`
 - `HEYGEN_API_KEY`
 - `HEYGEN_AVATAR_ID`
 - `HEYGEN_VOICE_ID`
@@ -104,24 +107,23 @@ Only variable names and configuration state are recorded here. No credential val
 
 #### Preview configured
 
-- All Preview branches: `BLOB_READ_WRITE_TOKEN`
-- `feature/multi-provider-creator-studio` only: `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `GITHUB_OAUTH_CALLBACK_URL`, `CREATOR_GITHUB_ALLOWED_USER_IDS`, `CREATOR_SESSION_SECRET`
+- All Preview branches: `BLOB_READ_WRITE_TOKEN`, `OPENAI_API_KEY`
+- `feature/heygen-digital-twin` only: `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `GITHUB_OAUTH_CALLBACK_URL`, `CREATOR_GITHUB_ALLOWED_LOGINS`, `CREATOR_GITHUB_ALLOWED_USER_IDS`, `CREATOR_SESSION_SECRET`
+- `feature/heygen-digital-twin` only: `ELEVENLABS_VOICE_ID`
+- `feature/heygen-digital-twin` only: `HEYGEN_AVATAR_ID`, `HEYGEN_VOICE_ID`
+- `feature/heygen-digital-twin` only: `YOUTUBE_OAUTH_CALLBACK_URL`
 
 #### Preview missing for a full Phase 1 test
 
 - `ANTHROPIC_API_KEY`
-- `OPENAI_API_KEY`
 - `ELEVENLABS_API_KEY`
-- `ELEVENLABS_VOICE_ID`
 - `HEYGEN_API_KEY`
-- `HEYGEN_AVATAR_ID`
-- `HEYGEN_VOICE_ID`
 - `RUNWAY_API_KEY`
 - `YOUTUBE_OAUTH_CLIENT_ID`
 - `YOUTUBE_OAUTH_CLIENT_SECRET`
-- `YOUTUBE_OAUTH_CALLBACK_URL`
 - `YOUTUBE_TOKEN_ENCRYPTION_KEY`
-- GitHub authentication variables for the current reconciliation branch, or equivalent variables scoped to all Preview branches
+
+The Vercel entries named `ANTHPOC`, `runway`, `Elevenlabs`, `myvocie`, and `openai` do not satisfy the exact server-side names expected by the application. Vercel does not reveal saved Secret values, so API-key values stored under those misspelled names must be re-entered under the correct names. The lowercase `openai` entry is redundant because `OPENAI_API_KEY` is already configured.
 
 ## Provider implementation details
 
@@ -133,7 +135,9 @@ Only variable names and configuration state are recorded here. No credential val
 - Repository permissions: not requested
 - Owner controls: immutable GitHub user-ID allowlist configured; login allowlist also configured in Production
 - Signed Production session: HttpOnly, Secure, SameSite=Lax, eight-hour default expiration
-- Full authorization callback/session/logout test: pending
+- Preview OAuth application, exact callback, owner allowlists, and branch-scoped secrets: configured
+- Preview authorization callback and signed-session test: passed for `@lalambert1982-eng` on 2026-08-24
+- Production callback/session, expiration, and logout test: pending
 
 ### Anthropic
 
@@ -141,7 +145,7 @@ Only variable names and configuration state are recorded here. No credential val
 - Default model: `claude-sonnet-5`
 - Credential use: server-side `ANTHROPIC_API_KEY` only
 - Source/UI: built
-- Production: configuration required
+- Production and Preview: configuration required
 - Real request: pending
 
 ### OpenAI Images
@@ -151,7 +155,7 @@ Only variable names and configuration state are recorded here. No credential val
 - Default quality: `low`
 - Credential use: server-side `OPENAI_API_KEY` only
 - Source/UI: built
-- Production: configuration required
+- Production and Preview: configured
 - Real request: pending
 
 ### ElevenLabs
@@ -161,7 +165,7 @@ Only variable names and configuration state are recorded here. No credential val
 - Credential use: server-side `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID`
 - Source/UI: built
 - Production: configured
-- Preview: configuration required
+- Preview: voice ID configured; `ELEVENLABS_API_KEY` still required
 - Real speech generation: pending
 
 The existing production voice ID was not revealed or overwritten during this audit.
@@ -173,8 +177,9 @@ The existing production voice ID was not revealed or overwritten during this aud
 - Credential use: server-side `HEYGEN_API_KEY`, `HEYGEN_AVATAR_ID`, and `HEYGEN_VOICE_ID`
 - Asynchronous job polling: built
 - Source/UI: built
-- Greg Digital Twin hardening: complete on the reconciliation branch, not yet merged/deployed
-- Production and Preview: configuration required
+- Greg Digital Twin hardening: complete and deployed to the reconciliation Preview; not yet merged to Production
+- Preview: approved avatar and voice IDs configured; `HEYGEN_API_KEY` still required
+- Production: configuration required
 - Real avatar generation: pending
 
 ### Runway
@@ -276,9 +281,9 @@ Use the shortest, lowest-cost safe artifacts possible. Do not make a YouTube tes
 
 ## Genuine remaining blockers
 
-1. The Greg Digital Twin reconciliation and full tool registry are not merged into `main` or deployed.
-2. Production is missing `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `HEYGEN_API_KEY`, `HEYGEN_AVATAR_ID`, `HEYGEN_VOICE_ID`, and `RUNWAY_API_KEY`.
-3. The current reconciliation branch has no usable GitHub-authenticated Preview configuration.
+1. The Greg Digital Twin reconciliation and full tool registry are Preview-deployed but not merged into `main` or deployed to Production.
+2. Preview still needs `ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY`, `HEYGEN_API_KEY`, `RUNWAY_API_KEY`, `YOUTUBE_OAUTH_CLIENT_ID`, `YOUTUBE_OAUTH_CLIENT_SECRET`, and `YOUTUBE_TOKEN_ENCRYPTION_KEY` under those exact names.
+3. Production is missing `ANTHROPIC_API_KEY`, `HEYGEN_API_KEY`, `HEYGEN_AVATAR_ID`, `HEYGEN_VOICE_ID`, and `RUNWAY_API_KEY`.
 4. No successful real external-provider generation is documented yet.
 5. The Production YouTube OAuth/Blob flow has not completed a real PRIVATE upload, and the exact Google redirect registration was not independently visible during this audit.
 6. GitHub Actions/check-run execution on the current `main` commit has not been independently confirmed.
@@ -288,9 +293,9 @@ Use the shortest, lowest-cost safe artifacts possible. Do not make a YouTube tes
 ## Manual actions still required
 
 1. Review, merge, and deploy the reconciliation branch after its PR checks pass.
-2. Add the six missing Production variables listed above. Use the approved HeyGen look and voice IDs from this document; add `HEYGEN_API_KEY` only through Vercel.
-3. Scope the required GitHub OAuth variables to the reconciliation Preview branch or to all Preview branches, using the exact Preview callback.
-4. Add only the Preview provider and YouTube variables needed for pre-production testing.
+2. Add the five missing Production variables listed above. Use the approved HeyGen look and voice IDs from this document; add `HEYGEN_API_KEY` only through Vercel.
+3. Re-enter the seven missing Preview variables listed above under their exact names. Do not delete the misspelled Secret entries until their replacement values have been verified.
+4. In the Google OAuth web client, add the exact Preview redirect `https://open-generative-ai-git-feat-84fb6c-lalambert1982-7239s-projects.vercel.app/api/social/youtube/callback` before testing YouTube Preview OAuth.
 5. In Google Cloud, confirm the Production web client redirect is exactly `https://open-generative-ai-lemon.vercel.app/api/social/youtube/callback` and that the publishing account is allowed while the app is in testing mode.
 6. Complete the minimal real-test sequence above and record successful job/video IDs without recording credentials.
 7. Confirm GitHub Actions are enabled and produce CI/CodeQL results for the reconciliation PR.
