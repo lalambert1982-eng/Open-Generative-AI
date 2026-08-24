@@ -30,8 +30,10 @@ const CLAIM_ROOT = 'creator-social/youtube-publish-claims';
 const STAGING_ROOT = 'creator-youtube-staging';
 const DEFAULT_MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
 const MAX_CONFIGURED_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
-const DEFAULT_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
-const MAX_UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
+// Leave a small margin for authorization, upload initialization, and cleanup
+// within the route's 300-second Vercel Hobby execution limit.
+const DEFAULT_UPLOAD_TIMEOUT_MS = 285 * 1000;
+const MAX_UPLOAD_TIMEOUT_MS = 285 * 1000;
 const STAGING_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const CLAIM_MAX_AGE_MS = 15 * 60 * 1000;
 const MAX_JSON_BODY_BYTES = 32 * 1024;

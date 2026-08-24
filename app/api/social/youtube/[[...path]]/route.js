@@ -29,7 +29,8 @@ import {
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 600;
+// Vercel Hobby deployments accept a maximum function duration of 300 seconds.
+export const maxDuration = 300;
 
 function noStoreJson(body, status = 200) {
     return NextResponse.json(body, {

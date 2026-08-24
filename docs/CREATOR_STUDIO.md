@@ -66,7 +66,7 @@ YouTube publishing is deliberately manual. Creator Studio uploads only with YouT
 
 The browser uploads the file directly into the private Blob store using a short-lived, pathname- and size-constrained client token. The long-lived Google refresh token and upload history are encrypted with AES-256-GCM before private Blob storage. Google access tokens remain server-side. A non-overwritable private publish claim blocks concurrent replay of the same staged file. A successfully published staging object is deleted; abandoned staging objects become eligible for cleanup after 24 hours.
 
-Private Blob storage, data transfer, Vercel function execution, and YouTube API use can be subject to provider quotas or charges. The default staged-file limit is 500 MiB and can be changed with `YOUTUBE_UPLOAD_MAX_BYTES` up to 2 GiB. `YOUTUBE_UPLOAD_TIMEOUT_MS` defaults to five minutes and is capped at ten minutes; keep it within the duration supported by the selected Vercel plan.
+Private Blob storage, data transfer, Vercel function execution, and YouTube API use can be subject to provider quotas or charges. The default staged-file limit is 500 MiB and can be changed with `YOUTUBE_UPLOAD_MAX_BYTES` up to 2 GiB. The YouTube route uses Vercel Hobby's 300-second function limit; `YOUTUBE_UPLOAD_TIMEOUT_MS` defaults to and is capped at 285 seconds so authorization, initialization, and cleanup retain a small execution margin. Large videos still need enough server-to-server bandwidth to finish within that limit.
 
 Treat `YOUTUBE_TOKEN_ENCRYPTION_KEY` as permanent deployment infrastructure. Changing or losing it makes the stored connection unreadable; disconnect/revoke the old Google authorization and reconnect after an intentional rotation.
 
@@ -80,7 +80,7 @@ The defaults are listed in `.env.example`:
 - `CONTENT_SAFETY_MODE=enforce` blocks the built-in high-risk content classes before any paid provider call. `audit` and `off` remain explicit operator choices.
 - `OPENAI_IMAGE_DEFAULT_QUALITY=low` keeps exploratory image calls less expensive; the UI can request medium or high quality.
 - `YOUTUBE_UPLOAD_MAX_BYTES=524288000` caps each private staged video at 500 MiB by default.
-- `YOUTUBE_UPLOAD_TIMEOUT_MS=300000` gives the server five minutes to stream the staged file to YouTube.
+- `YOUTUBE_UPLOAD_TIMEOUT_MS=285000` gives the server 285 seconds to stream the staged file to YouTube while preserving a small margin inside the route's 300-second Hobby limit.
 - Provider model/version variables can be pinned without changing source code.
 
 Rate limiting is an abuse guard, not a billing budget. Set spending limits and alerts in each provider account as well.
