@@ -23,9 +23,8 @@ Configuration is not implementation. A provider with a missing API key remains *
 | Production deployment | Ready |
 | Production URL | `https://open-generative-ai-lemon.vercel.app` |
 | Current reconciliation branch | `feature/heygen-digital-twin` |
-| Reconciliation commit | `487e3d9649f2fd00baa51da19154acab961c5c55` |
+| Reconciliation implementation commit | `487e3d9649f2fd00baa51da19154acab961c5c55` |
 | Reconciliation deployment | Ready (Preview) |
-| Preview deployment | `noPTDJVN5W7E5QQFFAML8v1PMnZj` |
 | Stable Preview URL | `https://open-generative-ai-git-feat-84fb6c-lalambert1982-7239s-projects.vercel.app` |
 
 The production commit contains private YouTube publishing from PR #5. The reconciliation branch also contains the completed Greg Digital Twin adapter, its tests, and the full Phase 1 tool registry; those branch changes must still be reviewed, merged, and deployed before they become production state.
