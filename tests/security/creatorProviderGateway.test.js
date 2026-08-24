@@ -7,6 +7,13 @@ import {
     handleOpenAiImage,
 } from '../../src/lib/creatorProviderGateway.js';
 import { createCreatorSession, creatorCookieSettings } from '../../src/lib/creatorAuth.js';
+import {
+    ANTHROPIC_ASSISTANT_TOOL_ID,
+    ELEVENLABS_VOICE_TOOL_ID,
+    HEYGEN_AVATAR_VIDEO_TOOL_ID,
+    OPENAI_IMAGE_TOOL_ID,
+    RUNWAY_VIDEO_TOOL_ID,
+} from '../../src/lib/creatorToolRegistry.js';
 import { resetRateLimitStore } from '../../src/lib/rateLimit.js';
 
 const baseEnv = {
@@ -92,6 +99,13 @@ test('provider status reports readiness without disclosing provider credentials'
     const text = await response.text();
     const body = JSON.parse(text);
     assert.deepEqual(body.providers.map((provider) => provider.configured), [true, true, true, true, true]);
+    assert.deepEqual(body.providers.map((provider) => provider.toolId), [
+        ANTHROPIC_ASSISTANT_TOOL_ID,
+        OPENAI_IMAGE_TOOL_ID,
+        ELEVENLABS_VOICE_TOOL_ID,
+        HEYGEN_AVATAR_VIDEO_TOOL_ID,
+        RUNWAY_VIDEO_TOOL_ID,
+    ]);
     for (const secret of Object.values(secrets)) assert.equal(text.includes(secret), false);
     assert.equal(text.includes(session), false);
 });

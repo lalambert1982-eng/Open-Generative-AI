@@ -1,7 +1,16 @@
-import { randomUUID } from 'node:crypto';
-
 import { evaluateJsonSafety } from './contentSafety.js';
 import { authenticateCreatorRequest, isSameOriginMutation } from './creatorAuth.js';
+import {
+    ANTHROPIC_ASSISTANT_TOOL_ID,
+    ELEVENLABS_VOICE_TOOL_ID,
+    OPENAI_IMAGE_TOOL_ID,
+    RUNWAY_VIDEO_TOOL_ID,
+} from './creatorToolRegistry.js';
+import {
+    createHeyGenAvatarVideoJob,
+    getHeyGenAvatarVideoJob,
+    heyGenProviderStatus,
+} from './heygenProvider.js';
 import { checkRateLimit } from './rateLimit.js';
 
 const DEFAULT_REQUEST_LIMIT = 30;
@@ -14,12 +23,10 @@ const MAX_BINARY_BYTES = 32 * 1024 * 1024;
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const OPENAI_IMAGE_URL = 'https://api.openai.com/v1/images/generations';
 const ELEVENLABS_API_BASE = 'https://api.elevenlabs.io/v1';
-const HEYGEN_API_BASE = 'https://api.heygen.com/v3';
 const RUNWAY_API_BASE = 'https://api.dev.runwayml.com/v1';
 
 const IMAGE_SIZES = new Set(['1024x1024', '1024x1536', '1536x1024']);
 const IMAGE_QUALITIES = new Set(['low', 'medium', 'high']);
-const HEYGEN_ASPECT_RATIOS = new Set(['16:9', '9:16', '1:1']);
 const RUNWAY_RATIOS = new Set([
     '1280:720',
     '720:1280',
@@ -256,12 +263,22 @@ function networkFailure(provider, result) {
     }, result.networkError === 'timeout' ? 504 : 502);
 }
 
+function heyGenResultResponse(result, successStatus = 200) {
+    if (result.ok) return creatorJson(result.job, successStatus);
+    return creatorJson({
+        error: result.error,
+        ...(Array.isArray(result.missing) ? { missing: result.missing } : {}),
+        ...(result.detail ? { detail: result.detail } : {}),
+    }, result.status || 502);
+}
+
 function configuredProviders(env) {
     return [
         {
             id: 'anthropic',
             label: 'Anthropic',
             capability: 'Creative assistant',
+            toolId: ANTHROPIC_ASSISTANT_TOOL_ID,
             configured: configuredSecret(env.ANTHROPIC_API_KEY),
             model: env.ANTHROPIC_MODEL || 'claude-sonnet-5',
         },
@@ -269,6 +286,7 @@ function configuredProviders(env) {
             id: 'openai',
             label: 'OpenAI',
             capability: 'Image generation',
+            toolId: OPENAI_IMAGE_TOOL_ID,
             configured: configuredSecret(env.OPENAI_API_KEY),
             model: env.OPENAI_IMAGE_MODEL || 'gpt-image-2',
         },
@@ -276,22 +294,16 @@ function configuredProviders(env) {
             id: 'elevenlabs',
             label: 'ElevenLabs',
             capability: 'Voice generation',
+            toolId: ELEVENLABS_VOICE_TOOL_ID,
             configured: configuredSecret(env.ELEVENLABS_API_KEY) && configuredSecret(env.ELEVENLABS_VOICE_ID),
             model: env.ELEVENLABS_MODEL || 'eleven_multilingual_v2',
         },
-        {
-            id: 'heygen',
-            label: 'HeyGen',
-            capability: 'Avatar video',
-            configured: configuredSecret(env.HEYGEN_API_KEY) &&
-                configuredSecret(env.HEYGEN_AVATAR_ID) &&
-                configuredSecret(env.HEYGEN_VOICE_ID),
-            model: env.HEYGEN_VIDEO_ENGINE || 'Avatar IV',
-        },
+        heyGenProviderStatus(env),
         {
             id: 'runway',
             label: 'Runway',
             capability: 'Cinematic video',
+            toolId: RUNWAY_VIDEO_TOOL_ID,
             configured: configuredSecret(env.RUNWAY_API_KEY),
             model: env.RUNWAY_VIDEO_MODEL || 'gen4.5',
         },
@@ -365,6 +377,7 @@ export async function handleAnthropicAssistant(request, {
 
     return creatorJson({
         provider: 'anthropic',
+        toolId: ANTHROPIC_ASSISTANT_TOOL_ID,
         model: decoded.value.model || env.ANTHROPIC_MODEL || 'claude-sonnet-5',
         text,
         stopReason: decoded.value.stop_reason || null,
@@ -427,6 +440,7 @@ export async function handleOpenAiImage(request, {
             'content-type': 'image/png',
             'content-disposition': 'inline; filename="creator-studio-image.png"',
             'x-generation-provider': 'openai',
+            'x-creator-tool-id': OPENAI_IMAGE_TOOL_ID,
         }),
     });
 }
@@ -488,6 +502,7 @@ export async function handleElevenLabsSpeech(request, {
             'content-type': result.headers.get('content-type') || 'audio/mpeg',
             'content-disposition': 'inline; filename="creator-studio-voice.mp3"',
             'x-generation-provider': 'elevenlabs',
+            'x-creator-tool-id': ELEVENLABS_VOICE_TOOL_ID,
         }),
     });
 }
@@ -498,53 +513,11 @@ export async function handleHeyGenVideo(request, {
 } = {}) {
     const auth = authorizeCreatorRequest(request, { env, action: 'heygen-create' });
     if (auth.response) return auth.response;
-    const missing = [];
-    if (!configuredSecret(env.HEYGEN_API_KEY)) missing.push('HEYGEN_API_KEY');
-    if (!configuredSecret(env.HEYGEN_AVATAR_ID)) missing.push('HEYGEN_AVATAR_ID');
-    if (!configuredSecret(env.HEYGEN_VOICE_ID)) missing.push('HEYGEN_VOICE_ID');
-    if (missing.length) return missingProviderConfiguration('HeyGen', missing);
 
     const parsed = await parseCreatorJson(request, { env });
     if (parsed.response) return parsed.response;
-    const script = stringField(parsed.value.script, 'Avatar script', { maximum: 5000 });
-    if (script.error) return creatorJson({ error: script.error }, 400);
-    const title = stringField(parsed.value.title, 'Title', { maximum: 100, optional: true });
-    if (title.error) return creatorJson({ error: title.error }, 400);
-    const aspectRatio = HEYGEN_ASPECT_RATIOS.has(parsed.value.aspectRatio)
-        ? parsed.value.aspectRatio
-        : '16:9';
-
-    const result = await fetchWithTimeout(fetchImpl, `${HEYGEN_API_BASE}/videos`, {
-        method: 'POST',
-        headers: {
-            'content-type': 'application/json',
-            'x-api-key': normalizedSecret(env.HEYGEN_API_KEY),
-            'idempotency-key': randomUUID(),
-        },
-        body: JSON.stringify({
-            type: 'avatar',
-            avatar_id: normalizedSecret(env.HEYGEN_AVATAR_ID),
-            voice_id: normalizedSecret(env.HEYGEN_VOICE_ID),
-            title: title.value || 'G.FURY Creator Studio',
-            aspect_ratio: aspectRatio,
-            output_format: 'mp4',
-            script: script.value,
-        }),
-    }, 60_000);
-    if (result.networkError) return networkFailure('HeyGen', result);
-
-    const decoded = await readProviderJson(result);
-    if (decoded.error) return creatorJson({ error: 'HeyGen returned an invalid response.' }, 502);
-    if (!result.ok) return providerFailure('HeyGen', result, decoded.value);
-    const videoId = decoded.value?.data?.video_id;
-    if (typeof videoId !== 'string' || !OPAQUE_ID_PATTERN.test(videoId)) {
-        return creatorJson({ error: 'HeyGen returned no valid video ID.' }, 502);
-    }
-    return creatorJson({
-        provider: 'heygen',
-        id: videoId,
-        status: decoded.value?.data?.status || 'waiting',
-    }, 202);
+    const result = await createHeyGenAvatarVideoJob(parsed.value, { env, fetchImpl });
+    return heyGenResultResponse(result, 202);
 }
 
 export async function handleHeyGenStatus(request, {
@@ -553,30 +526,9 @@ export async function handleHeyGenStatus(request, {
 } = {}) {
     const auth = authorizeCreatorRequest(request, { env, action: 'heygen-status', statusRequest: true });
     if (auth.response) return auth.response;
-    if (!configuredSecret(env.HEYGEN_API_KEY)) {
-        return missingProviderConfiguration('HeyGen', ['HEYGEN_API_KEY']);
-    }
     const videoId = new URL(request.url).searchParams.get('id') || '';
-    if (!OPAQUE_ID_PATTERN.test(videoId)) return creatorJson({ error: 'A valid HeyGen video ID is required.' }, 400);
-
-    const result = await fetchWithTimeout(fetchImpl, `${HEYGEN_API_BASE}/videos/${encodeURIComponent(videoId)}`, {
-        headers: { 'x-api-key': normalizedSecret(env.HEYGEN_API_KEY) },
-    }, 30_000);
-    if (result.networkError) return networkFailure('HeyGen', result);
-    const decoded = await readProviderJson(result);
-    if (decoded.error) return creatorJson({ error: 'HeyGen returned an invalid response.' }, 502);
-    if (!result.ok) return providerFailure('HeyGen', result, decoded.value);
-    const data = decoded.value?.data || {};
-    const videoUrl = safeHttpsUrl(data.video_url, 'HeyGen video URL');
-    const thumbnailUrl = safeHttpsUrl(data.thumbnail_url, 'HeyGen thumbnail URL');
-    return creatorJson({
-        provider: 'heygen',
-        id: videoId,
-        status: typeof data.status === 'string' ? data.status : 'unknown',
-        videoUrl: videoUrl.value || null,
-        thumbnailUrl: thumbnailUrl.value || null,
-        failure: safeProviderMessage(data.failure_message) || null,
-    });
+    const result = await getHeyGenAvatarVideoJob(videoId, { env, fetchImpl });
+    return heyGenResultResponse(result);
 }
 
 export async function handleRunwayVideo(request, {
@@ -623,7 +575,12 @@ export async function handleRunwayVideo(request, {
     if (typeof taskId !== 'string' || !OPAQUE_ID_PATTERN.test(taskId)) {
         return creatorJson({ error: 'Runway returned no valid task ID.' }, 502);
     }
-    return creatorJson({ provider: 'runway', id: taskId, status: decoded.value.status || 'PENDING' }, 202);
+    return creatorJson({
+        provider: 'runway',
+        toolId: RUNWAY_VIDEO_TOOL_ID,
+        id: taskId,
+        status: decoded.value.status || 'PENDING',
+    }, 202);
 }
 
 export async function handleRunwayStatus(request, {
@@ -657,6 +614,7 @@ export async function handleRunwayStatus(request, {
         : [];
     return creatorJson({
         provider: 'runway',
+        toolId: RUNWAY_VIDEO_TOOL_ID,
         id: taskId,
         status: typeof decoded.value?.status === 'string' ? decoded.value.status : 'UNKNOWN',
         output,

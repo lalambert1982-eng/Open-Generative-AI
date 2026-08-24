@@ -1,5 +1,7 @@
 # Creator Studio provider setup
 
+The authoritative Phase 1 reconciliation and production-readiness snapshot is [`PHASE_1_STATUS.md`](./PHASE_1_STATUS.md).
+
 Creator Studio is a private, Runway-inspired workspace that coordinates six specialist services:
 
 | Tool | Provider | Required deployment variables |
@@ -12,6 +14,26 @@ Creator Studio is a private, Runway-inspired workspace that coordinates six spec
 | Manual private publishing | YouTube + Vercel Blob | `YOUTUBE_OAUTH_CLIENT_ID`, `YOUTUBE_OAUTH_CLIENT_SECRET`, `YOUTUBE_OAUTH_CALLBACK_URL`, `YOUTUBE_TOKEN_ENCRYPTION_KEY`, `BLOB_READ_WRITE_TOKEN` |
 
 All provider credentials are read only by the Next.js server. They are never sent to the browser, returned by the provider-status endpoint, or committed to the repository.
+
+## Configure Greg's HeyGen Digital Twin
+
+Add these server-only variables to Vercel for every environment where HeyGen should be available:
+
+```dotenv
+HEYGEN_API_KEY=<add securely in Vercel; never commit this value>
+HEYGEN_AVATAR_ID=cae16de37d204cdc98a8c36dd859cd46
+HEYGEN_VOICE_ID=aecf8d74f6b8467b84d24e9dc541b19a
+```
+
+`HEYGEN_AVATAR_ID` is Greg's **Digital Twin look ID**. Do not replace it with the avatar group ID `e998e58ee3094ecbb1787d478b6fa082`; groups contain looks, while video generation requires the selected look ID. The voice ID is Greg's completed default HeyGen voice.
+
+Creator Studio submits text-to-avatar jobs to HeyGen asynchronously and polls the fixed HeyGen video-status endpoint. The default canvas is portrait `9:16` at `1080p`, with social captions enabled in the UI. The authenticated browser receives only a normalized job ID, status, HTTPS video and thumbnail URLs, duration, and sanitized error information.
+
+The reusable server-side tool registry exposes the existing implementations as `anthropic_assistant`, `openai_image`, `elevenlabs_voice`, `heygen_avatar_video`, `runway_video`, and `youtube_publish`. These definitions are metadata boundaries for later orchestration; they do not duplicate provider adapters or add Selena-specific business logic.
+
+The `heygen_avatar_video` boundary resolves the default avatar and voice from `HEYGEN_AVATAR_ID` and `HEYGEN_VOICE_ID`, never from browser input or a client-readable environment variable. It accepts validated optional avatar/voice overrides, background configuration, captions, and supported motion settings. The payload builder already separates script input from media input so a later `ElevenLabs → audio URL/asset → HeyGen lip-sync` path can be added without replacing the current HeyGen voice workflow.
+
+If any required HeyGen variable is missing, the provider status is **Setup Required** and the generation route returns a safe configuration error instead of calling HeyGen or crashing.
 
 ## Configure GitHub sign-in and Vercel
 
@@ -89,7 +111,8 @@ Rate limiting is an abuse guard, not a billing budget. Set spending limits and a
 
 - An existing provider web subscription does not always include API usage. Confirm that each account has API access and an API balance before testing.
 - ElevenLabs requires a reusable voice ID in addition to the API key.
-- HeyGen requires an avatar ID and a voice ID. Its API billing can be separate from the HeyGen web-app plan.
+- HeyGen requires the API key, Greg Digital Twin look ID, and Greg voice ID shown above. Its API billing can be separate from the HeyGen web-app plan.
+- HeyGen generation is asynchronous. Creator Studio polls no more frequently than every five seconds and stops after about ten minutes, while retaining the job ID for provider-side follow-up.
 - Runway video jobs are asynchronous. Creator Studio polls the task endpoint no more frequently than every five seconds and stops after about ten minutes.
 - A Runway first-frame image must use a provider-reachable HTTPS URL. Direct local-file handoff is not part of this first version.
 - YouTube publishing requires a private Vercel Blob store and a Google OAuth web client. A normal YouTube Premium or Google subscription does not replace YouTube Data API OAuth.
@@ -101,7 +124,7 @@ Rate limiting is an abuse guard, not a billing budget. Set spending limits and a
 - Access is checked against the configured GitHub login and, when configured, the immutable numeric GitHub user ID.
 - The browser receives only a signed, short-lived, HTTP-only, Secure, SameSite session cookie. Provider keys and GitHub tokens never enter browser storage.
 - Server routes use a constant-time comparison, per-action rate limiting, request-size limits, content safety, fixed upstream hosts, strict input validation, timeouts, no-store responses, and sanitized provider errors.
-- Provider-status responses expose only configuration booleans and model labels—not credential values.
+- Provider-status responses expose only configuration booleans, readiness labels, model labels, and the safe identity labels `Greg` / `Digital Twin`—not credential values or provider asset IDs.
 - The YouTube flow binds OAuth state and PKCE to the signed GitHub identity, encrypts the refresh token at rest, validates private staging paths, MIME types, sizes, age, and file signatures, and accepts only Google's fixed token/revocation/upload hosts.
 - Paid generation mutations reject cross-origin requests. **Sign out** expires the Studio session cookie immediately.
 - This is an owner-allowlisted identity gate. Add durable user records, roles, shared rate limiting, audit logs, and provider budgets before opening the deployment to customers or collaborators.
