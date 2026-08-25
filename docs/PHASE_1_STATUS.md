@@ -1,6 +1,6 @@
 # G.FURY Creator Studio v1 — Phase 1 Status
 
-Authoritative reconciliation snapshot for `lalambert1982-eng/Open-Generative-AI`. Deployment evidence was last reconciled on 2026-08-24; the uncommitted Brain Router working-tree update is recorded separately as of 2026-08-25.
+Authoritative reconciliation snapshot for `lalambert1982-eng/Open-Generative-AI`. Deployment evidence was last reconciled on 2026-08-25, including the approved Brain Router Preview deployment.
 
 This document distinguishes four independent states:
 
@@ -11,15 +11,15 @@ This document distinguishes four independent states:
 
 Configuration is not implementation. A provider with a missing API key remains **Built — configuration required**.
 
-## Brain Router working-tree update — not deployed
+## Brain Router branch update — Preview deployed
 
-The current working tree is based on `bdc3659b6739df8850ae6aa48fe4c9e0b546f595` on `feature/heygen-digital-twin`. It adds a provider-neutral Selena reasoning boundary without recreating the existing agents or changing the deployed Production environment. These changes are local only: they have not been pushed, merged, Preview-deployed, Production-deployed, or real-provider tested.
+Commit `29d950edf4be2e3a5b4025eda573262c7eca2f85` on `feature/heygen-digital-twin` adds a provider-neutral Selena reasoning boundary without recreating the existing agents or changing the deployed Production environment. The commit is pushed and Vercel reports its Preview deployment as Ready. It has not been merged into `main`, Production-deployed, or real-provider tested.
 
 | Brain provider | Code Built | Preview Configured | Production Configured | Test Passed | Production Ready |
 |---|---|---|---|---|---|
-| Gemini | Built (working tree) | Not re-verified | Not modified | Mock test passed | No |
-| Groq | Built (working tree) | Not re-verified | Not modified | Mock test passed | No |
-| OpenRouter | Built (working tree) | Not re-verified | Not modified | Mock test passed | No |
+| Gemini | Built (Preview branch) | Not re-verified | Not modified | Mock test passed | No |
+| Groq | Built (Preview branch) | Not re-verified | Not modified | Mock test passed | No |
+| OpenRouter | Built (Preview branch) | Not re-verified | Not modified | Mock test passed | No |
 | Anthropic | Built (existing + router compatibility) | Not re-verified | Not modified | Mock test passed | No |
 
 Initial routing is Gemini → Groq → OpenRouter with at most three attempts. Anthropic remains selectable but is not included in the initial free/developer fallback order. “Free/developer” describes the intended account tier, not a guarantee of zero cost; provider limits and billing still apply.
@@ -38,7 +38,7 @@ Preview requires three provider-specific Secret values (`GEMINI_API_KEY`, `GROQ_
 | Production deployment | Ready |
 | Production URL | `https://open-generative-ai-lemon.vercel.app` |
 | Current reconciliation branch | `feature/heygen-digital-twin` |
-| Reconciliation implementation commit | `487e3d9649f2fd00baa51da19154acab961c5c55` |
+| Reconciliation implementation commit | `29d950edf4be2e3a5b4025eda573262c7eca2f85` |
 | Reconciliation deployment | Ready (Preview) |
 | Stable Preview URL | `https://open-generative-ai-git-feat-84fb6c-lalambert1982-7239s-projects.vercel.app` |
 
@@ -60,7 +60,7 @@ Vercel shows both the current Production deployment and the current `feature/hey
 
 - GitHub OAuth owner authentication with state, PKCE, a signed short-lived session, immutable user-ID allowlisting, login allowlisting, logout, and same-origin mutation checks.
 - Authenticated Creator Studio provider-status reporting that exposes readiness, model labels, and safe provider identity labels without credential values.
-- A local provider-neutral Brain Router for Gemini, Groq, OpenRouter, and the preserved Anthropic implementation, with normalized requests/results, bounded safe fallback, and fail-closed sensitivity routing. This working-tree capability is not deployed yet.
+- A Preview-deployed provider-neutral Brain Router for Gemini, Groq, OpenRouter, and the preserved Anthropic implementation, with normalized requests/results, bounded safe fallback, and fail-closed sensitivity routing.
 - Anthropic creative assistant for strategy, planning, prompts, and scripts.
 - OpenAI image generation with configurable size/quality and a low-cost default.
 - ElevenLabs speech generation using a server-configured reusable voice.
@@ -276,8 +276,8 @@ The Brain Router is a reusable reasoning boundary for the existing agents. It do
 | Design Agent compilation | 4 files compiled |
 | Studio compilation | 26 files compiled |
 | Next.js production build | Passed |
-| Current working-tree strong-secret scan | 0 matches |
-| Current committed `HEAD` strong-secret scan | 0 matches |
+| Brain Router merge-candidate strong-secret scan | 0 matches |
+| Brain Router committed-tree strong-secret scan | 0 matches |
 | Tracked non-example `.env` files | 0 |
 
 The generic credential-assignment scan matched only synthetic test fixtures in `tests/security`; it found no deployment credential file or production credential value. The build emitted an existing outdated Browserslist database warning, which is non-blocking.
@@ -290,7 +290,7 @@ GitHub contains CI and CodeQL workflow definitions. No GitHub Actions/check-run 
 2. Generate one short Anthropic concept/script after adding its key.
 3. Generate one low-cost OpenAI image after adding its key.
 4. Generate one short ElevenLabs clip with the configured canonical Greg/G.FURY voice.
-5. Generate one short Greg HeyGen Digital Twin video and poll it to completion after merging/deploying the adapter and adding all three HeyGen variables.
+5. Generate one short Greg HeyGen Digital Twin video and poll it to completion after all three HeyGen variables are present in the test environment.
 6. Submit and poll one minimal Runway job if credits are available.
 7. Complete YouTube connect, private Blob staging, explicit approval, PRIVATE upload, history, and disconnect/revoke testing.
 8. Confirm the exact Production YouTube callback in both Vercel and the Google OAuth web client during the connect test.
