@@ -1,6 +1,6 @@
 # G.FURY Creator Studio v1 — Phase 1 Status
 
-Authoritative reconciliation snapshot for `lalambert1982-eng/Open-Generative-AI` as of 2026-08-24.
+Authoritative reconciliation snapshot for `lalambert1982-eng/Open-Generative-AI`. Deployment evidence was last reconciled on 2026-08-24; the uncommitted Brain Router working-tree update is recorded separately as of 2026-08-25.
 
 This document distinguishes four independent states:
 
@@ -10,6 +10,21 @@ This document distinguishes four independent states:
 - **Production ready**: built, configured, real-tested, secure, documented, merged, and deployed.
 
 Configuration is not implementation. A provider with a missing API key remains **Built — configuration required**.
+
+## Brain Router working-tree update — not deployed
+
+The current working tree is based on `bdc3659b6739df8850ae6aa48fe4c9e0b546f595` on `feature/heygen-digital-twin`. It adds a provider-neutral Selena reasoning boundary without recreating the existing agents or changing the deployed Production environment. These changes are local only: they have not been pushed, merged, Preview-deployed, Production-deployed, or real-provider tested.
+
+| Brain provider | Code Built | Preview Configured | Production Configured | Test Passed | Production Ready |
+|---|---|---|---|---|---|
+| Gemini | Built (working tree) | Not re-verified | Not modified | Mock test passed | No |
+| Groq | Built (working tree) | Not re-verified | Not modified | Mock test passed | No |
+| OpenRouter | Built (working tree) | Not re-verified | Not modified | Mock test passed | No |
+| Anthropic | Built (existing + router compatibility) | Not re-verified | Not modified | Mock test passed | No |
+
+Initial routing is Gemini → Groq → OpenRouter with at most three attempts. Anthropic remains selectable but is not included in the initial free/developer fallback order. “Free/developer” describes the intended account tier, not a guarantee of zero cost; provider limits and billing still apply.
+
+Preview requires three provider-specific Secret values (`GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`) plus the seven non-secret values documented in `CREATOR_STUDIO.md`. Production was deliberately left untouched. No real API request was made during this implementation.
 
 ## Current Git and deployment state
 
@@ -45,6 +60,7 @@ Vercel shows both the current Production deployment and the current `feature/hey
 
 - GitHub OAuth owner authentication with state, PKCE, a signed short-lived session, immutable user-ID allowlisting, login allowlisting, logout, and same-origin mutation checks.
 - Authenticated Creator Studio provider-status reporting that exposes readiness, model labels, and safe provider identity labels without credential values.
+- A local provider-neutral Brain Router for Gemini, Groq, OpenRouter, and the preserved Anthropic implementation, with normalized requests/results, bounded safe fallback, and fail-closed sensitivity routing. This working-tree capability is not deployed yet.
 - Anthropic creative assistant for strategy, planning, prompts, and scripts.
 - OpenAI image generation with configurable size/quality and a low-cost default.
 - ElevenLabs speech generation using a server-configured reusable voice.
@@ -60,6 +76,7 @@ Vercel shows both the current Production deployment and the current `feature/hey
 |---|---|
 | GitHub authentication | `src/lib/creatorAuth.js`, `app/api/auth/github/start/route.js`, `app/api/auth/github/callback/route.js`, `app/api/auth/session/route.js`, `app/api/auth/logout/route.js` |
 | Provider gateway | `src/lib/creatorProviderGateway.js`, `app/api/creator/[[...path]]/route.js` |
+| Brain Router | `src/lib/brainRouter.js` |
 | HeyGen adapter | `src/lib/heygenProvider.js` |
 | Tool registry | `src/lib/creatorToolRegistry.js` |
 | YouTube and Blob | `src/lib/youtubePublishing.js`, `app/api/social/youtube/[[...path]]/route.js` |
@@ -140,10 +157,11 @@ The Vercel entries named `ANTHPOC`, `runway`, `Elevenlabs`, `myvocie`, and `open
 
 ### Anthropic
 
-- Route: `POST /api/creator/assistant`
+- Compatibility handler/tool: `handleAnthropicAssistant` / `anthropic_assistant`
+- Creator Studio route on the current working tree: `POST /api/creator/assistant` through the provider-neutral Brain Router
 - Default model: `claude-sonnet-5`
 - Credential use: server-side `ANTHROPIC_API_KEY` only
-- Source/UI: built
+- Source/UI: existing implementation preserved; optional brain provider
 - Production and Preview: configuration required
 - Real request: pending
 
@@ -224,6 +242,7 @@ The reconciliation branch exposes the existing implementations through one metad
 
 | Tool ID | Existing implementation |
 |---|---|
+| `brain_reasoning` | Provider-neutral Gemini/Groq/OpenRouter/Anthropic reasoning boundary |
 | `anthropic_assistant` | Anthropic assistant handler |
 | `openai_image` | OpenAI image handler |
 | `elevenlabs_voice` | ElevenLabs speech handler |
@@ -231,7 +250,7 @@ The reconciliation branch exposes the existing implementations through one metad
 | `runway_video` | Runway job handler and poller |
 | `youtube_publish` | Authenticated private YouTube publisher |
 
-This is a reusable Phase 2 boundary only. No Selena routing, memory, workflow, or business logic is included in Phase 1.
+The Brain Router is a reusable reasoning boundary for the existing agents. It does not add Phase 2 company memory, project memory, workflow state, approval queues, autonomous tool execution, or Selena-specific business logic.
 
 ## Security posture
 
@@ -249,16 +268,16 @@ This is a reusable Phase 2 boundary only. No Selena routing, memory, workflow, o
 
 | Verification | Result |
 |---|---|
-| Security/auth/provider/YouTube tests | 58 passed, 0 failed |
+| Security/auth/brain/provider/YouTube tests | 82 passed, 0 failed |
 | Existing repository tests | 17 passed, 0 failed |
-| Total automated tests | 75 passed, 0 failed |
+| Total automated tests | 99 passed, 0 failed |
 | Workflow Builder compilation | 22 files compiled |
 | AI Agent compilation | 11 files compiled |
 | Design Agent compilation | 4 files compiled |
 | Studio compilation | 26 files compiled |
 | Next.js production build | Passed |
 | Current working-tree strong-secret scan | 0 matches |
-| Reachable Git history strong-secret scan | 0 matches |
+| Current committed `HEAD` strong-secret scan | 0 matches |
 | Tracked non-example `.env` files | 0 |
 
 The generic credential-assignment scan matched only synthetic test fixtures in `tests/security`; it found no deployment credential file or production credential value. The build emitted an existing outdated Browserslist database warning, which is non-blocking.

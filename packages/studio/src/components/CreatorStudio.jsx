@@ -32,9 +32,9 @@ const TOOLS = [
   {
     id: "assistant",
     label: "Assistant",
-    provider: "anthropic",
+    provider: "brain",
     eyebrow: "Think",
-    description: "Turn a rough idea into a production plan, script, or optimized prompt.",
+    description: "Ask Selena's provider-neutral brain for a production plan, script, or optimized prompt.",
     icon: Bot,
     accent: "from-violet-500 to-fuchsia-400",
   },
@@ -297,7 +297,9 @@ function ResultCanvas({ output, tool }) {
         <article className="relative max-h-full w-full max-w-3xl overflow-y-auto rounded-2xl border border-white/[0.08] bg-black/35 p-6 text-sm leading-7 text-white/75 custom-scrollbar sm:p-9">
           <div className="mb-5 flex items-center justify-between gap-3 border-b border-white/[0.07] pb-4">
             <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-300">Anthropic response</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-300">
+                {output.provider ? `${output.provider} response` : "Selena response"}
+              </p>
               <p className="mt-1 text-xs text-white/30">{output.model}</p>
             </div>
             <Check size={18} className="text-emerald-400" />
@@ -995,7 +997,7 @@ export default function CreatorStudio({ onGenerationStart, onGenerationEnd, onGe
         const response = await request("assistant", { method: "POST", body: draft });
         if (!response.ok) throw new Error(await responseError(response));
         const data = await response.json();
-        output = { type: "text", text: data.text, model: data.model };
+        output = { type: "text", text: data.text, model: data.model, provider: data.provider };
       } else if (toolId === "image") {
         const response = await request("image", { method: "POST", body: draft });
         if (!response.ok) throw new Error(await responseError(response));
@@ -1136,7 +1138,7 @@ export default function CreatorStudio({ onGenerationStart, onGenerationEnd, onGe
               <h1 className="truncate text-sm font-bold tracking-tight">Creator Studio</h1>
               <span className="rounded-full border border-violet-400/20 bg-violet-400/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-violet-200">Private</span>
             </div>
-            <p className="truncate text-[10px] text-white/30">One canvas · six specialist providers</p>
+            <p className="truncate text-[10px] text-white/30">One brain router · five production tools</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -1240,7 +1242,7 @@ export default function CreatorStudio({ onGenerationStart, onGenerationEnd, onGe
               )}
             >
               {working ? <LoaderCircle size={17} className="animate-spin" /> : activeTool.id === "assistant" ? <Send size={16} /> : activeTool.id === "publish" ? <YoutubeMark size={17} /> : <Play size={16} fill="currentColor" />}
-              {working ? "Working…" : activeTool.id === "assistant" ? "Ask Anthropic" : activeTool.id === "publish" ? "Upload privately to YouTube" : `Generate ${activeTool.label}`}
+              {working ? "Working…" : activeTool.id === "assistant" ? "Ask Selena" : activeTool.id === "publish" ? "Upload privately to YouTube" : `Generate ${activeTool.label}`}
             </button>
 
             <div className="mt-5 flex items-center justify-center gap-2 text-[10px] text-white/22">

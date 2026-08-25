@@ -10,7 +10,13 @@ Creator Studio does not use that browser-readable key flow. It uses GitHub OAuth
 
 ## Creator Studio provider gateway
 
-The Anthropic, OpenAI, ElevenLabs, HeyGen, and Runway integrations are server-side only. Configure their credentials as deployment environment variables. Protect `/api/creator/*` with a separate GitHub OAuth application, `CREATOR_SESSION_SECRET`, and the `CREATOR_GITHUB_ALLOWED_USER_IDS` and/or `CREATOR_GITHUB_ALLOWED_LOGINS` allowlist.
+The Gemini, Groq, OpenRouter, Anthropic, OpenAI, ElevenLabs, HeyGen, and Runway integrations used by Creator Studio are server-side only. Configure their credentials as deployment environment variables. Protect `/api/creator/*` with a separate GitHub OAuth application, `CREATOR_SESSION_SECRET`, and the `CREATOR_GITHUB_ALLOWED_USER_IDS` and/or `CREATOR_GITHUB_ALLOWED_LOGINS` allowlist.
+
+The Selena Brain Router separates reasoning from generation. `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, and `ANTHROPIC_API_KEY` are read only inside the server adapters and are never placed in `NEXT_PUBLIC_*`, browser storage, URLs, response bodies, or provider-status payloads. API keys are sent only as authorization headers to fixed official provider hosts. Model names and routing order are normal configuration values, not credentials.
+
+Fallback is bounded and is allowed only for transient availability/capacity failures, provider timeouts, malformed responses, or unsupported required capabilities. Invalid input, missing/invalid credentials, and safety rejection stop immediately. Requests classified as paid generation, publishing, another external mutation, or requiring explicit approval also disable fallback. The router returns tool calls but does not execute them, preventing a reasoning retry from duplicating an external side effect.
+
+`PRIVATE` and `CLIENT_CONFIDENTIAL` requests fail closed unless the operator explicitly configures reviewed eligible providers. Empty eligibility lists make no privacy claim and send the material nowhere. Eligibility must be revisited when provider terms, account controls, or deployment policy change.
 
 The YouTube integration reuses that signed Creator Studio identity gate and adds a separate Google OAuth state/PKCE exchange. It requests only `youtube.upload`, encrypts long-lived refresh tokens and upload history with AES-256-GCM in private Vercel Blob, and never returns Google credentials to the browser. Browser staging tokens are short-lived and restricted to the signed-in user's private pathname, allowed video MIME types, and configured size limit. Publication requires an explicit approval flag and forces `privacyStatus=private` with subscriber notifications disabled. Disconnect revokes the Google token before deleting the encrypted local record.
 

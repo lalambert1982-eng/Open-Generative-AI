@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
     ANTHROPIC_ASSISTANT_TOOL_ID,
+    BRAIN_REASONING_TOOL_ID,
     ELEVENLABS_VOICE_TOOL_ID,
     HEYGEN_AVATAR_VIDEO_TOOL_ID,
     OPENAI_IMAGE_TOOL_ID,
@@ -13,6 +14,7 @@ import {
 } from '../../src/lib/creatorToolRegistry.js';
 
 const EXPECTED_TOOLS = [
+    [BRAIN_REASONING_TOOL_ID, 'brain-router'],
     [ANTHROPIC_ASSISTANT_TOOL_ID, 'anthropic'],
     [OPENAI_IMAGE_TOOL_ID, 'openai'],
     [ELEVENLABS_VOICE_TOOL_ID, 'elevenlabs'],
@@ -21,7 +23,7 @@ const EXPECTED_TOOLS = [
     [YOUTUBE_PUBLISH_TOOL_ID, 'youtube'],
 ];
 
-test('Creator Studio registry exposes each existing Phase 1 provider exactly once', () => {
+test('Creator Studio registry exposes the brain boundary and each existing Phase 1 tool exactly once', () => {
     const tools = listCreatorToolDefinitions();
     assert.deepEqual(tools.map((tool) => [tool.id, tool.provider]), EXPECTED_TOOLS);
     assert.equal(new Set(tools.map((tool) => tool.id)).size, EXPECTED_TOOLS.length);

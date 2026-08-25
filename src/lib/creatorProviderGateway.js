@@ -1,7 +1,14 @@
 import { evaluateJsonSafety } from './contentSafety.js';
 import { authenticateCreatorRequest, isSameOriginMutation } from './creatorAuth.js';
 import {
+    brainErrorResponse,
+    brainProviderStatuses,
+    brainRouterStatus,
+    reasonWithBrain,
+} from './brainRouter.js';
+import {
     ANTHROPIC_ASSISTANT_TOOL_ID,
+    BRAIN_REASONING_TOOL_ID,
     ELEVENLABS_VOICE_TOOL_ID,
     OPENAI_IMAGE_TOOL_ID,
     RUNWAY_VIDEO_TOOL_ID,
@@ -20,7 +27,6 @@ const MAX_JSON_BODY_BYTES = 64 * 1024;
 const MAX_PROVIDER_JSON_BYTES = 32 * 1024 * 1024;
 const MAX_BINARY_BYTES = 32 * 1024 * 1024;
 
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const OPENAI_IMAGE_URL = 'https://api.openai.com/v1/images/generations';
 const ELEVENLABS_API_BASE = 'https://api.elevenlabs.io/v1';
 const RUNWAY_API_BASE = 'https://api.dev.runwayml.com/v1';
@@ -272,39 +278,50 @@ function heyGenResultResponse(result, successStatus = 200) {
     }, result.status || 502);
 }
 
-function configuredProviders(env) {
+function generationProviderStatuses(env) {
+    const heyGen = heyGenProviderStatus(env);
     return [
-        {
-            id: 'anthropic',
-            label: 'Anthropic',
-            capability: 'Creative assistant',
-            toolId: ANTHROPIC_ASSISTANT_TOOL_ID,
-            configured: configuredSecret(env.ANTHROPIC_API_KEY),
-            model: env.ANTHROPIC_MODEL || 'claude-sonnet-5',
-        },
         {
             id: 'openai',
             label: 'OpenAI',
+            category: 'generation',
             capability: 'Image generation',
             toolId: OPENAI_IMAGE_TOOL_ID,
+            built: true,
             configured: configuredSecret(env.OPENAI_API_KEY),
+            tested: false,
+            productionReady: false,
             model: env.OPENAI_IMAGE_MODEL || 'gpt-image-2',
         },
         {
             id: 'elevenlabs',
             label: 'ElevenLabs',
+            category: 'generation',
             capability: 'Voice generation',
             toolId: ELEVENLABS_VOICE_TOOL_ID,
+            built: true,
             configured: configuredSecret(env.ELEVENLABS_API_KEY) && configuredSecret(env.ELEVENLABS_VOICE_ID),
+            tested: false,
+            productionReady: false,
             model: env.ELEVENLABS_MODEL || 'eleven_multilingual_v2',
         },
-        heyGenProviderStatus(env),
+        {
+            ...heyGen,
+            category: 'generation',
+            built: true,
+            tested: false,
+            productionReady: false,
+        },
         {
             id: 'runway',
             label: 'Runway',
+            category: 'generation',
             capability: 'Cinematic video',
             toolId: RUNWAY_VIDEO_TOOL_ID,
+            built: true,
             configured: configuredSecret(env.RUNWAY_API_KEY),
+            tested: false,
+            productionReady: false,
             model: env.RUNWAY_VIDEO_MODEL || 'gen4.5',
         },
     ];
@@ -313,75 +330,78 @@ function configuredProviders(env) {
 export async function handleCreatorProviders(request, { env = process.env } = {}) {
     const auth = authorizeCreatorRequest(request, { env, action: 'providers', statusRequest: true });
     if (auth.response) return auth.response;
-    return creatorJson({ providers: configuredProviders(env) });
+    const brain = {
+        ...brainRouterStatus(env),
+        toolId: BRAIN_REASONING_TOOL_ID,
+    };
+    const brainProviders = brainProviderStatuses(env);
+    const generationProviders = generationProviderStatuses(env);
+    return creatorJson({
+        providers: [brain, ...generationProviders],
+        brain,
+        brainProviders,
+        generationProviders,
+    });
+}
+
+async function handleBrainReasoning(request, {
+    env,
+    fetchImpl,
+    providerOverride = null,
+    action = 'brain',
+} = {}) {
+    const auth = authorizeCreatorRequest(request, { env, action });
+    if (auth.response) return auth.response;
+
+    const parsed = await parseCreatorJson(request, { env });
+    if (parsed.response) return parsed.response;
+    try {
+        const result = await reasonWithBrain({
+            task: parsed.value.task ?? parsed.value.prompt,
+            instructions: parsed.value.instructions,
+            context: parsed.value.context,
+            mode: parsed.value.mode,
+            tools: parsed.value.tools,
+            sensitivity: parsed.value.sensitivity,
+            desiredOutput: parsed.value.desiredOutput,
+            agent: parsed.value.agent,
+            allowFallback: parsed.value.allowFallback,
+            requiresExplicitApproval: parsed.value.requiresExplicitApproval,
+            sideEffect: parsed.value.sideEffect,
+        }, { env, fetchImpl, providerOverride });
+        return creatorJson({
+            ...result,
+            toolId: providerOverride === 'anthropic'
+                ? ANTHROPIC_ASSISTANT_TOOL_ID
+                : BRAIN_REASONING_TOOL_ID,
+            // Keep the legacy field while clients migrate to finishReason.
+            stopReason: result.finishReason,
+        });
+    } catch (error) {
+        const failure = brainErrorResponse(error);
+        return creatorJson(failure.body, failure.status);
+    }
+}
+
+export async function handleBrainAssistant(request, {
+    env = process.env,
+    fetchImpl = fetch,
+} = {}) {
+    return handleBrainReasoning(request, { env, fetchImpl, action: 'brain' });
 }
 
 export async function handleAnthropicAssistant(request, {
     env = process.env,
     fetchImpl = fetch,
 } = {}) {
-    const auth = authorizeCreatorRequest(request, { env, action: 'anthropic' });
-    if (auth.response) return auth.response;
-    if (!configuredSecret(env.ANTHROPIC_API_KEY)) {
-        return missingProviderConfiguration('Anthropic', ['ANTHROPIC_API_KEY']);
-    }
-
-    const parsed = await parseCreatorJson(request, { env });
-    if (parsed.response) return parsed.response;
-    const prompt = stringField(parsed.value.prompt, 'Prompt', { maximum: 20_000 });
-    if (prompt.error) return creatorJson({ error: prompt.error }, 400);
-    const mode = ['plan', 'script', 'prompt', 'strategy'].includes(parsed.value.mode)
-        ? parsed.value.mode
-        : 'strategy';
-
-    const modeInstruction = {
-        plan: 'Return a concise, executable production plan with ordered steps and provider recommendations.',
-        script: 'Return production-ready narration or dialogue plus a brief shot plan.',
-        prompt: 'Return polished generation prompts tailored separately for image, avatar video, and cinematic video.',
-        strategy: 'Act as the creative director: clarify the goal, recommend a workflow, and provide the strongest next action.',
-    }[mode];
-
-    const result = await fetchWithTimeout(fetchImpl, ANTHROPIC_API_URL, {
-        method: 'POST',
-        headers: {
-            'content-type': 'application/json',
-            'x-api-key': normalizedSecret(env.ANTHROPIC_API_KEY),
-            'anthropic-version': env.ANTHROPIC_API_VERSION || '2023-06-01',
+    return handleBrainReasoning(request, {
+        env: {
+            ...env,
+            BRAIN_SYSTEM_PROMPT: env.BRAIN_SYSTEM_PROMPT || env.ANTHROPIC_ASSISTANT_SYSTEM_PROMPT,
         },
-        body: JSON.stringify({
-            model: env.ANTHROPIC_MODEL || 'claude-sonnet-5',
-            max_tokens: Math.round(boundedNumber(env.ANTHROPIC_MAX_TOKENS, 6000, 512, 16_000)),
-            system: [
-                env.ANTHROPIC_ASSISTANT_SYSTEM_PROMPT ||
-                    'You are the private creative director inside G.FURY Creator Studio. Help turn ideas into practical multimedia productions while respecting consent, copyright, provider policies, and the stated budget.',
-                modeInstruction,
-                'Do not claim an asset has been generated until a generation provider actually returns it.',
-            ].join('\n\n'),
-            messages: [{ role: 'user', content: prompt.value }],
-        }),
-    }, 90_000);
-    if (result.networkError) return networkFailure('Anthropic', result);
-
-    const decoded = await readProviderJson(result);
-    if (decoded.error) return creatorJson({ error: 'Anthropic returned an invalid response.' }, 502);
-    if (!result.ok) return providerFailure('Anthropic', result, decoded.value);
-
-    const text = Array.isArray(decoded.value?.content)
-        ? decoded.value.content
-            .filter((block) => block?.type === 'text' && typeof block.text === 'string')
-            .map((block) => block.text)
-            .join('\n')
-            .trim()
-        : '';
-    if (!text) return creatorJson({ error: 'Anthropic returned no assistant text.' }, 502);
-
-    return creatorJson({
-        provider: 'anthropic',
-        toolId: ANTHROPIC_ASSISTANT_TOOL_ID,
-        model: decoded.value.model || env.ANTHROPIC_MODEL || 'claude-sonnet-5',
-        text,
-        stopReason: decoded.value.stop_reason || null,
-        usage: decoded.value.usage || null,
+        fetchImpl,
+        providerOverride: 'anthropic',
+        action: 'anthropic',
     });
 }
 

@@ -1,9 +1,38 @@
+export const BRAIN_REASONING_TOOL_ID = 'brain_reasoning';
 export const ANTHROPIC_ASSISTANT_TOOL_ID = 'anthropic_assistant';
 export const OPENAI_IMAGE_TOOL_ID = 'openai_image';
 export const ELEVENLABS_VOICE_TOOL_ID = 'elevenlabs_voice';
 export const HEYGEN_AVATAR_VIDEO_TOOL_ID = 'heygen_avatar_video';
 export const RUNWAY_VIDEO_TOOL_ID = 'runway_video';
 export const YOUTUBE_PUBLISH_TOOL_ID = 'youtube_publish';
+
+export const BRAIN_REASONING_TOOL = Object.freeze({
+    id: BRAIN_REASONING_TOOL_ID,
+    provider: 'brain-router',
+    label: 'Selena Brain Router',
+    purpose: 'Give existing agents provider-neutral planning, routing, strategy, and creative reasoning.',
+    asynchronous: false,
+    executesExternalActions: false,
+    accepts: Object.freeze([
+        'task',
+        'instructions',
+        'context',
+        'mode',
+        'tools',
+        'sensitivity',
+        'desiredOutput',
+    ]),
+    returns: Object.freeze([
+        'provider',
+        'model',
+        'text',
+        'structuredOutput',
+        'toolCalls',
+        'usage',
+        'finishReason',
+        'error',
+    ]),
+});
 
 export const ANTHROPIC_ASSISTANT_TOOL = Object.freeze({
     id: ANTHROPIC_ASSISTANT_TOOL_ID,
@@ -114,6 +143,7 @@ export const YOUTUBE_PUBLISH_TOOL = Object.freeze({
 });
 
 const CREATOR_TOOL_REGISTRY = Object.freeze({
+    [BRAIN_REASONING_TOOL_ID]: BRAIN_REASONING_TOOL,
     [ANTHROPIC_ASSISTANT_TOOL_ID]: ANTHROPIC_ASSISTANT_TOOL,
     [OPENAI_IMAGE_TOOL_ID]: OPENAI_IMAGE_TOOL,
     [ELEVENLABS_VOICE_TOOL_ID]: ELEVENLABS_VOICE_TOOL,
