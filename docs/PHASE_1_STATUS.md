@@ -11,6 +11,18 @@ This document distinguishes four independent states:
 
 Configuration is not implementation. A provider with a missing API key remains **Built — configuration required**.
 
+## Storyboard UX candidate — Built locally, not deployed
+
+The `feature/storyboard-workspace` candidate replaces the separate private Image/Video screens with one local-state project workspace while retaining the existing routes and MuAPI provider adapter. It adds scene management, generated-asset previews, Auto text/image-to-video request shaping, previous-scene continuation, and transition metadata. It does not add persistence, provider switching, uploads, a compositor, final export, or Design mode.
+
+| Candidate area | Built | Configured | Tested | Production Ready |
+|---|---|---|---|---|
+| Storyboard interface and scene logic | Yes — local candidate | Reuses existing status; no environment change | Automated tests and Studio compilation only | No — not deployed or live-tested |
+| Transition controls | Metadata only | Not applicable | State logic only | No — no compositor |
+| Design mode and final compositor | Planned only | Not applicable | Not tested | No |
+
+See [`STORYBOARD_WORKSPACE.md`](./STORYBOARD_WORKSPACE.md) for the exact scope and future architecture. This candidate must stop before deployment and requires explicit approval for any later Preview/Production promotion.
+
 ## Brain Router release — Production deployed
 
 PR #6 merged the provider-neutral Selena reasoning boundary and Greg Digital Twin hardening into `main` without recreating the existing agents. Vercel reports Production commit `3d6ea7882e8033b374dd9b9d65a51a2dcc30f1ff` as Ready. The release passed mocked/local and CI verification, but no real external-provider generation was run as part of deployment.
@@ -198,8 +210,8 @@ The Vercel entries named `ANTHPOC`, `runway`, `Elevenlabs`, `myvocie`, and `open
 - Default image model: `nano-banana`
 - Default text-to-video model: `seedance-lite-t2v`
 - Default image-to-video model: `kling-v2.1-master-i2v`
-- Credential use: server-side `MUAPI_API_KEY` only
-- Cost gate: `MUAPI_KEY_MODE=sandbox`; production mode also requires `MUAPI_ALLOW_PAID_GENERATION=true`
+- Credential use: Sandbox selects server-side `MUAPI_API_KEY`; Production selects the separate server-side `MUAPI_PRODUCTION_API_KEY`
+- Cost gate: `MUAPI_KEY_MODE=sandbox` is the safe default; production mode also requires `MUAPI_ALLOW_PAID_GENERATION=true`
 - Source/UI: built, merged, and deployed through PR #8
 - General Studio live Sandbox mock: passed at `$0` on 2026-08-26
 - Private Creator Studio live Sandbox mock: passed task `8c3dc22a-f59a-4c74-abbd-587ad4c84730` on Production on 2026-08-26
@@ -216,6 +228,8 @@ The Vercel entries named `ANTHPOC`, `runway`, `Elevenlabs`, `myvocie`, and `open
 - Real speech generation: pending
 
 The existing production voice ID was not revealed or overwritten during this audit.
+
+The currently reported ElevenLabs `401`/`403` remains a credential/permission blocker. The Storyboard candidate preserves the Voice UI and secure server route and does not change this provider configuration.
 
 ### HeyGen
 
@@ -299,6 +313,27 @@ The Brain Router is a reusable reasoning boundary for the existing agents. It do
 - YouTube publication cannot become public automatically.
 
 ## Verification results
+
+### Local Storyboard candidate — 2026-08-27
+
+| Verification | Result |
+|---|---|
+| Security/auth/brain/provider/YouTube tests | 92 passed, 0 failed |
+| Existing repository tests | 17 passed, 0 failed |
+| Storyboard scene/request/routing tests | 6 passed, 0 failed |
+| Total local automated tests | 115 passed, 0 failed |
+| Workflow Builder compilation | 22 files compiled |
+| AI Agent compilation | 11 files compiled |
+| Design Agent compilation | 4 files compiled |
+| Studio compilation | 28 files compiled |
+| Next.js optimized production build | Passed locally |
+| Real Storyboard provider generation | Not run |
+| Preview/Production deployment | Not run |
+| Production environment changes | None |
+
+The local build emitted existing npm proxy/dependency and outdated Browserslist warnings. They did not fail compilation. Node also emitted a module-type performance warning for the new pure ESM test helper; this is non-failing and does not affect the bundled Studio output.
+
+### Historical deployed-release evidence
 
 | Verification | Result |
 |---|---|
