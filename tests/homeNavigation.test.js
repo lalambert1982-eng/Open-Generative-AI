@@ -9,6 +9,7 @@ test('Home quick actions route to existing workspaces and preserve YouTube', () 
   assert.equal(byId.image, 'creator');
   assert.equal(byId.video, 'creator');
   assert.equal(byId.storyboard, 'creator');
+  assert.equal(byId.graphics, 'graphics');
   assert.equal(byId.youtube, 'youtube');
   assert.equal(byId['ai-influencer'], 'ai-influencer');
 });
@@ -19,6 +20,7 @@ test('Selena Home intent routing is deterministic and does not call a provider',
   assert.equal(resolveHomeIntent('Make an avatar presenter'), 'avatar');
   assert.equal(resolveHomeIntent('Build a five-scene music video'), 'creator');
   assert.equal(resolveHomeIntent('Create a social campaign'), 'marketing');
+  assert.equal(resolveHomeIntent('Design a track meet poster'), 'graphics');
   assert.equal(resolveHomeIntent('Help me think through an original concept'), 'agents');
 });
 
