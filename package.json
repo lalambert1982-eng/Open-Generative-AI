@@ -34,6 +34,7 @@
     "stage:local-ai": "node scripts/stage-local-ai-binary.js",
     "test:security": "node --test tests/security/*.test.js",
     "test:storyboard": "node --test tests/storyboardWorkspace.test.js",
+    "test:navigation": "node --test tests/homeNavigation.test.js",
     "package:linux:deb": "node scripts/package-linux-deb.js",
     "package:linux:deb:arm64": "node scripts/package-linux-deb.js --arch arm64",
     "package:linux:deb:x64": "node scripts/package-linux-deb.js --arch x64",

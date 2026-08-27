@@ -633,7 +633,7 @@ function hasRequiredInput(toolId, draft) {
   return Boolean(draft.prompt.trim());
 }
 
-export default function CreatorStudio({ onGenerationStart, onGenerationEnd, onGenerationComplete, onGenerationError }) {
+export default function CreatorStudio({ initialTool = "storyboard", onGenerationStart, onGenerationEnd, onGenerationComplete, onGenerationError }) {
   const [session, setSession] = useState(null);
   const [authState, setAuthState] = useState("checking");
   const [providers, setProviders] = useState([]);
@@ -649,6 +649,12 @@ export default function CreatorStudio({ onGenerationStart, onGenerationEnd, onGe
   const [youtubeUploadProgress, setYoutubeUploadProgress] = useState(0);
   const objectUrlsRef = useRef(new Set());
   const generationTokenRef = useRef(0);
+
+  useEffect(() => {
+    if (TOOLS.some((tool) => tool.id === initialTool)) {
+      setActiveToolId(initialTool);
+    }
+  }, [initialTool]);
 
   const activeTool = TOOLS.find((tool) => tool.id === activeToolId) || TOOLS[0];
   const activeDraft = drafts[activeTool.id];

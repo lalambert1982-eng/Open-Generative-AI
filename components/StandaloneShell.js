@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
-import { CreatorStudio, ImageStudio, VideoStudio, ClippingStudio, VibeMotionStudio, LipSyncStudio, RecastStudio, CinemaStudio, AudioStudio, MarketingStudio, WorkflowStudio, AgentStudio, AppsStudio, AiInfluencerStudio, LayersStudio, getUserBalance } from 'studio';
+import { CreatorStudio, HomeStudio, ImageStudio, VideoStudio, ClippingStudio, VibeMotionStudio, LipSyncStudio, RecastStudio, CinemaStudio, AudioStudio, MarketingStudio, WorkflowStudio, AgentStudio, AppsStudio, AiInfluencerStudio, LayersStudio, getUserBalance } from 'studio';
 
 const DesignAgentStudio = dynamic(() => import('studio').then(mod => mod.DesignAgentStudio), {
   ssr: false,
@@ -14,13 +14,67 @@ import ApiKeyModal from './ApiKeyModal';
 
 const TABS = [
   {
+    id: 'home',
+    label: 'Home',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/>
+      </svg>
+    )
+  },
+  {
     id: 'creator',
-    label: 'Creator Studio',
+    label: 'Storyboard',
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3z"/>
         <path d="M5 15l.8 2.2L8 18l-2.2.8L5 21l-.8-2.2L2 18l2.2-.8L5 15z"/>
         <path d="M19 13l.8 2.2L22 16l-2.2.8L19 19l-.8-2.2L16 16l2.2-.8L19 13z"/>
+      </svg>
+    )
+  },
+  {
+    id: 'voice',
+    label: 'Voice',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v5"/>
+      </svg>
+    )
+  },
+  {
+    id: 'avatar',
+    label: 'Avatar',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="8" r="4"/><path d="M4 22a8 8 0 0 1 16 0"/>
+      </svg>
+    )
+  },
+  {
+    id: 'youtube',
+    label: 'YouTube',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="2.5" y="5.5" width="19" height="13" rx="4"/><path d="m10 9 5 3-5 3V9Z"/>
+      </svg>
+    )
+  },
+  {
+    id: 'projects',
+    label: 'Projects',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 7h6l2 2h10v11H3z"/><path d="M3 7V4h6l2 3"/>
+      </svg>
+    )
+  },
+  {
+    id: 'assets',
+    label: 'Assets',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>
       </svg>
     )
   },
@@ -202,9 +256,9 @@ const TABS = [
 
 const NAVIGATION_CATEGORIES = [
   {
-    id: 'creator-workspace',
-    label: 'Creator Workspace',
-    tabIds: ['creator'],
+    id: 'home',
+    label: 'Home',
+    tabIds: ['home'],
     icon: (
       <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3z"/>
@@ -213,9 +267,9 @@ const NAVIGATION_CATEGORIES = [
     )
   },
   {
-    id: 'images',
-    label: 'Images',
-    tabIds: ['image', 'layers', 'cinema', 'design-agent', 'ai-influencer'],
+    id: 'agent',
+    label: 'Agent · Selena',
+    tabIds: ['agents'],
     icon: (
       <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="2"/>
@@ -225,9 +279,9 @@ const NAVIGATION_CATEGORIES = [
     )
   },
   {
-    id: 'video',
-    label: 'Video',
-    tabIds: ['video', 'clipping', 'vibe-motion', 'lipsync', 'body-swap', 'marketing'],
+    id: 'create',
+    label: 'Create / Tool',
+    tabIds: ['creator', 'voice', 'avatar', 'youtube', 'image', 'video', 'audio', 'design-agent'],
     icon: (
       <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <rect x="2" y="4" width="15" height="16" rx="2"/>
@@ -237,9 +291,9 @@ const NAVIGATION_CATEGORIES = [
     )
   },
   {
-    id: 'audio',
-    label: 'Audio',
-    tabIds: ['audio'],
+    id: 'apps',
+    label: 'Apps',
+    tabIds: ['apps', 'ai-influencer', 'cinema', 'marketing', 'clipping', 'vibe-motion', 'lipsync', 'body-swap', 'layers'],
     icon: (
       <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M9 18V5l12-2v13"/>
@@ -249,9 +303,9 @@ const NAVIGATION_CATEGORIES = [
     )
   },
   {
-    id: 'agents-automation',
-    label: 'Agents & Automation',
-    tabIds: ['agents', 'workflows'],
+    id: 'workflows',
+    label: 'Workflows',
+    tabIds: ['workflows'],
     icon: (
       <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <rect x="3" y="3" width="6" height="6" rx="1"/>
@@ -261,10 +315,37 @@ const NAVIGATION_CATEGORIES = [
         <path d="M12 13v2"/>
       </svg>
     )
+  },
+  {
+    id: 'projects',
+    label: 'Projects',
+    tabIds: ['projects'],
+    icon: (
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 7h6l2 2h10v11H3z"/><path d="M3 7V4h6l2 3"/>
+      </svg>
+    )
+  },
+  {
+    id: 'assets',
+    label: 'Assets',
+    tabIds: ['assets'],
+    icon: (
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>
+      </svg>
+    )
   }
 ];
 
-const EXPLORE_APPS_TAB = TABS.find((tab) => tab.id === 'apps');
+const EXPLORE_APPS_TAB = null;
+const CREATOR_TOOL_BY_TAB = {
+  creator: 'storyboard',
+  voice: 'voice',
+  avatar: 'avatar',
+  youtube: 'publish',
+};
+const SECURE_WORKSPACE_TABS = new Set(['home', ...Object.keys(CREATOR_TOOL_BY_TAB), 'projects', 'assets']);
 
 const getNavigationCategory = (tabId) => (
   NAVIGATION_CATEGORIES.find((category) => category.tabIds.includes(tabId))
@@ -301,6 +382,26 @@ const persistNotifications = (notifications) => {
   }
 };
 
+function PlannedWorkspace({ type }) {
+  const isProjects = type === 'Projects';
+  return (
+    <div className="flex h-full items-center justify-center bg-[#050506] p-6 text-white">
+      <div className="w-full max-w-xl rounded-[28px] border border-white/10 bg-[#0c0c10] p-7 shadow-[0_30px_100px_rgba(0,0,0,0.45)] sm:p-10">
+        <p className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-300/75">Phase 2 · persistence required</p>
+        <h1 className="mt-3 text-3xl font-semibold tracking-[-0.04em]">{type}</h1>
+        <p className="mt-4 text-sm leading-6 text-white/45">
+          {isProjects
+            ? 'Storyboard projects currently live in local React state. This page will list saved Creator Studio projects after a secure persistence layer is designed and tested.'
+            : 'Generated media currently remains attached to its active workspace. This page will become the shared Images, Videos, Music, Voice, Avatars, Graphics, and Uploads library after secure asset persistence is added.'}
+        </p>
+        <p className="mt-5 rounded-xl border border-amber-300/15 bg-amber-300/[0.06] px-4 py-3 text-xs leading-5 text-amber-100/65">
+          Nothing is being presented as saved or production-ready before storage exists.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function StandaloneShell() {
   const params = useParams();
   const router = useRouter();
@@ -323,7 +424,7 @@ export default function StandaloneShell() {
 
   const { id: urlWorkflowId } = getWorkflowInfo();
 
-  // Initialize activeTab from URL slug/params or default to the unified creator workspace.
+  // Initialize activeTab from URL slug/params or default to the Creator command center.
   const getInitialTab = () => {
     if (idFromParams || slug.includes('workflow')) return 'workflows';
     if (slug.includes('agents')) return 'agents';
@@ -331,7 +432,7 @@ export default function StandaloneShell() {
     if (slug.includes('apps')) return 'apps';
     const firstSegment = slug[0];
     if (firstSegment && TABS.find(t => t.id === firstSegment)) return firstSegment;
-    return 'creator';
+    return 'home';
   };
   
   const [apiKey, setApiKey] = useState(null);
@@ -494,7 +595,7 @@ export default function StandaloneShell() {
     const handlePopState = () => {
       const path = window.location.pathname;
       const segments = path.split('/').filter(Boolean);
-      const tabId = segments[1] || 'image';
+      const tabId = segments[1] || 'home';
       if (TABS.find(t => t.id === tabId)) {
         setActiveTab(tabId);
       }
@@ -676,7 +777,7 @@ export default function StandaloneShell() {
     </div>
   );
 
-  if (!apiKey && activeTab !== 'creator') {
+  if (!apiKey && !SECURE_WORKSPACE_TABS.has(activeTab)) {
     return <ApiKeyModal onSave={handleKeySave} />;
   }
 
@@ -689,7 +790,7 @@ export default function StandaloneShell() {
       onDrop={handleDrop}
     >
       {/* Drag Overlay */}
-      {activeTab !== 'creator' && isDragging && (
+      {!SECURE_WORKSPACE_TABS.has(activeTab) && isDragging && (
         <div className="fixed inset-0 z-[100] bg-[#22d3ee]/10 backdrop-blur-md border-4 border-dashed border-[#22d3ee]/50 flex items-center justify-center pointer-events-none transition-all duration-300">
           <div className="bg-[#0a0a0a] p-8 rounded-3xl border border-white/10 shadow-2xl flex flex-col items-center gap-4 scale-110 animate-pulse">
             <div className="w-20 h-20 bg-[#22d3ee] rounded-2xl flex items-center justify-center">
@@ -706,7 +807,7 @@ export default function StandaloneShell() {
       )}
 
       {/* Vadoo promo banner */}
-      {activeTab !== 'creator' && showVadooBanner && (
+      {!SECURE_WORKSPACE_TABS.has(activeTab) && showVadooBanner && (
         <div className="flex-shrink-0 w-full bg-indigo-600 flex items-center justify-center px-4 py-2 gap-3 relative z-50">
           <a
             href="https://vadoo.tv"
@@ -797,7 +898,7 @@ export default function StandaloneShell() {
 
           {/* Right: Actions */}
           <div className="flex-shrink-0 flex items-center gap-3">
-            {activeTab !== 'creator' && (
+            {!SECURE_WORKSPACE_TABS.has(activeTab) && (
               <>
             <div className="flex items-center gap-2.5 bg-white/5 px-3 py-1.5 rounded-full border border-white/5 transition-colors">
               <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
@@ -979,13 +1080,23 @@ export default function StandaloneShell() {
 
         {/* Studio Content */}
         <div className="flex-1 min-h-0 h-full relative overflow-hidden bg-[#030303]">
-        <div className={activeTab === 'creator' ? "h-full w-full" : "hidden"}>
+        <div className={activeTab === 'home' ? "h-full w-full" : "hidden"}>
+          <HomeStudio onNavigate={handleTabChange} />
+        </div>
+        <div className={Object.hasOwn(CREATOR_TOOL_BY_TAB, activeTab) ? "h-full w-full" : "hidden"}>
           <CreatorStudio
+            initialTool={CREATOR_TOOL_BY_TAB[activeTab] || 'storyboard'}
             onGenerationStart={makeGenerationStartCallback('creator')}
             onGenerationEnd={makeGenerationEndCallback('creator')}
             onGenerationComplete={makeSuccessCallback('creator')}
             onGenerationError={makeErrorCallback('creator')}
           />
+        </div>
+        <div className={activeTab === 'projects' ? "h-full w-full" : "hidden"}>
+          <PlannedWorkspace type="Projects" />
+        </div>
+        <div className={activeTab === 'assets' ? "h-full w-full" : "hidden"}>
+          <PlannedWorkspace type="Assets" />
         </div>
         <div className={activeTab === 'image' ? "h-full w-full" : "hidden"}>
           <ImageStudio apiKey={apiKey} droppedFiles={droppedFiles} onFilesHandled={handleFilesHandled} onGenerationStart={makeGenerationStartCallback('image')} onGenerationEnd={makeGenerationEndCallback('image')} onGenerationComplete={makeSuccessCallback('image')} onGenerationError={makeErrorCallback('image')} />

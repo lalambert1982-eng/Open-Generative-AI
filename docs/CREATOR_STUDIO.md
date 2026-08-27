@@ -4,6 +4,8 @@ The authoritative Phase 1 reconciliation and production-readiness snapshot is [`
 
 Creator Studio is a private, project-based visual workspace with one provider-neutral reasoning boundary and five top-level tools: Storyboard, Assistant, Voice, Avatar, and YouTube. Storyboard combines the existing image and video paths into connected scenes; it does not replace their server routes or provider adapter. Reasoning providers are brains used by Selena and the existing agents; they are not new agents and they do not execute media or publishing actions.
 
+The Phase 1 Home/navigation candidate is documented in [`CREATOR_STUDIO_NAVIGATION.md`](./CREATOR_STUDIO_NAVIGATION.md). Its Selena prompt performs deterministic tool routing only; it does not invoke a provider or initiate generation. The navigation preserves a direct YouTube entry into the existing private publishing tool. Projects and Assets are honest placeholders until durable persistence is designed and tested.
+
 ### Brain providers
 
 | Role | Provider | Required server variable | Model configuration |
