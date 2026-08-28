@@ -12,7 +12,6 @@ import {
   LayoutGrid, Menu, Mic2, PanelLeftClose, PanelLeftOpen, Send, Settings2, Share2,
   Sparkles, UserRound, WandSparkles, Workflow, X, Zap,
 } from 'lucide-react';
-import ApiKeyModal from './ApiKeyModal';
 import CreatorHome from './CreatorHome';
 import LegacyProviderSettings from './LegacyProviderSettings';
 import StudioAssets from './StudioAssets';
@@ -189,8 +188,6 @@ export default function StandaloneShell() {
   };
 
   if (!mounted) return <div className="flex h-screen items-center justify-center bg-[#050506] text-cyan-200"><Sparkles className="animate-pulse" /></div>;
-  if (!apiKey && LEGACY_DESTINATIONS.has(destinationId)) return <ApiKeyModal onSave={saveKey} />;
-
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-[#050506] text-white"
       onDragOver={(event) => event.preventDefault()}
@@ -237,7 +234,9 @@ export default function StandaloneShell() {
           </aside>
         )}
         <main className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
-          {renderDestination()}
+          {!apiKey && LEGACY_DESTINATIONS.has(destinationId) && destinationId !== 'provider-settings'
+            ? <LegacyProviderSettings apiKey={apiKey} onSave={saveKey} onClear={clearKey} requiredFor={destination.label} />
+            : renderDestination()}
           {isDragging && <div className="pointer-events-none absolute inset-4 z-50 flex items-center justify-center rounded-3xl border-2 border-dashed border-cyan-300/40 bg-cyan-300/[0.08] backdrop-blur"><p className="text-sm font-bold text-cyan-100">Drop media into the active tool</p></div>}
         </main>
       </div>

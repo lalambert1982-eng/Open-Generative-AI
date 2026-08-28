@@ -49,3 +49,8 @@ test('no new provider key is embedded in the integrated shell or secure Creator 
     assert.match(creator, /Provider keys never enter the browser/);
 });
 
+test('legacy credentials are requested inside the Creator shell instead of replacing navigation', async () => {
+    const shell = await read('../components/StandaloneShell.js');
+    assert.doesNotMatch(shell, /return <ApiKeyModal/);
+    assert.match(shell, /LEGACY_DESTINATIONS\.has\(destinationId\).*requiredFor=\{destination\.label\}/s);
+});

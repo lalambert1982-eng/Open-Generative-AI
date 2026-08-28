@@ -3,13 +3,13 @@
 import { useState } from 'react';
 import { KeyRound, ShieldCheck } from 'lucide-react';
 
-export default function LegacyProviderSettings({ apiKey, onSave, onClear }) {
+export default function LegacyProviderSettings({ apiKey, onSave, onClear, requiredFor = '' }) {
   const [value, setValue] = useState('');
   return (
     <div className="h-full overflow-y-auto bg-[#050506] px-5 py-10 text-white sm:px-8">
       <div className="mx-auto max-w-3xl">
-        <p className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-300/70">Advanced</p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight">Provider settings</h1>
+        <p className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-300/70">{requiredFor ? 'Compatibility required' : 'Advanced'}</p>
+        <h1 className="mt-2 text-3xl font-semibold tracking-tight">{requiredFor ? `${requiredFor} needs a legacy session key` : 'Provider settings'}</h1>
         <p className="mt-3 text-sm leading-6 text-white/38">Selena and the secure Creator tools use server-owned credentials. This browser-session key exists only for legacy MuAPI workspaces that have not yet migrated to the Creator gateway.</p>
 
         <div className="mt-8 rounded-3xl border border-white/[0.08] bg-white/[0.025] p-6">
