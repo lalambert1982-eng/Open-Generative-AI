@@ -377,15 +377,6 @@ export default function WorkflowStudio({
     handleSelectWorkflow,
   ]);
 
-  // Handle reload on exit to clear builder CSS
-  useEffect(() => {
-    const fromBuilder = sessionStorage.getItem("fromWorkflowBuilder");
-    if (fromBuilder && (!urlWorkflowId || activeSubTab !== "builder")) {
-      sessionStorage.removeItem("fromWorkflowBuilder");
-      window.location.reload();
-    }
-  }, [urlWorkflowId, activeSubTab]);
-
   useEffect(() => {
     async function loadWorkflows() {
       try {

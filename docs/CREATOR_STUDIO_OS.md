@@ -22,13 +22,25 @@ The shell now organizes working destinations as:
 - **Home:** intent-first Selena prompt and working quick actions.
 - **Agent:** Selena, using the secure Creator assistant route without agent creation.
 - **Tools:** secure Image, Video, Voice, and Avatar plus preserved legacy Music, Advanced Video, Lip Sync, Motion Graphics, Transform, and Smart Clip.
-- **Apps:** AI Generator, AI Influencer, Graphic Studio, Scene Builder, Marketing Studio, and Edit Studio.
+- **Apps:** AI Generator, AI Influencer, Graphic Studio, Scene Builder, Music Video, Marketing Studio, and Edit Studio.
 - **Workflows:** the existing MuAPI workflow list, playground, and builder.
 - **Assets:** browser-session generated URLs with working Scene Builder and Lip Sync handoffs.
 - **Publish:** the existing direct private YouTube workflow.
 - **Advanced:** Agent Blueprints, Marketplace/Developer Templates, and legacy provider settings.
 
-Projects are intentionally absent from primary navigation because `main` has no durable Project source of truth. A cosmetic empty page would misrepresent product state. Music Video is likewise not presented as a complete App until a real end-to-end builder exists.
+Projects are intentionally absent from primary navigation because `main` has no durable Project source of truth. A cosmetic empty page would misrepresent product state. Music Video reuses the real Storyboard workspace as a scene-planning app; it does not claim music-track mixing or final video composition.
+
+## Source dependencies and clean checkout
+
+The three Git repositories below are source dependencies, not runtime services:
+
+| Submodule | Pinned source | Workspace package | Runtime GitHub connection |
+|---|---|---|---|
+| `packages/Vibe-Workflow` | `SamurAIGPT/Vibe-Workflow` | `packages/workflow-builder` → `workflow-builder` | None |
+| `packages/Open-Poe-AI` | `Anil-matcha/Open-Poe-AI` | `packages/agents` → `ai-agent` | None |
+| `packages/Open-AI-Design-Agent` | `Anil-matcha/Open-AI-Design-Agent` | `packages/design-agent` → `design-agent` | None |
+
+GitHub CI and CodeQL use `actions/checkout` with `submodules: recursive`. Local setup uses `npm run setup`, which initializes submodules before `npm install`. Vercel's Git checkout has successfully built the same public submodule pins, but a missing/empty submodule must be treated as a checkout failure—not solved with a runtime GitHub token or another service.
 
 ## Reused architecture
 
@@ -61,6 +73,8 @@ Graphic Studio is a consolidation wrapper, not a new editor. It exposes:
 2. **Generate & Edit:** existing image generation/upload plus `DrawModal` pencil, eraser, rectangles, arrows, text, inserted images, undo, redo, and export concepts.
 3. **Layers:** existing layer decomposition and composition workspace.
 
+Graphic Studio itself no longer requires a legacy key merely to open. Secure Creator image Assets can enter **Generate & Edit** and open directly in `DrawModal`. Only Creative Canvas and legacy provider-backed edits remain behind the isolated compatibility credential.
+
 Security limitation: `DesignAgentStudio` still copies the session-scoped BYOK credential into `localStorage.token` while CreativeCanvas is active because CreativeCanvas reads a Bearer token from that location. Cleanup remains in place on exit. This is a known legacy compatibility boundary, not the preferred Creator security model. Migration should add a Creator-authenticated server adapter to CreativeCanvas, then remove browser token compatibility without rewriting the canvas.
 
 ## Storyboard and Auto routing
@@ -77,7 +91,7 @@ The browser cannot select provider keys or arbitrary model IDs. The UI reports *
 
 ## Assets and projects
 
-The shell records successful HTTPS generation outputs in `sessionStorage` for the current browser session. An image can enter Scene Builder as its first frame without copying a URL; image/video assets can populate Lip Sync without re-uploading. This is a working handoff, but it is not a durable multi-device Asset service.
+The shell records successful HTTPS generation outputs in `sessionStorage` for the current browser session. An image can enter Graphic Studio or Scene Builder without copying a URL; image/video assets can populate Lip Sync without re-uploading. This is a working handoff, but it is not a durable multi-device Asset service. Voice, avatar, upload, publish-draft, and multi-device persistence remain future work.
 
 A future Project source of truth should own conversations, assets, storyboard manifests, workflow references, outputs, and publish drafts. It needs explicit ownership, versioning, retention, deletion, and storage rules before implementation.
 
@@ -85,9 +99,7 @@ A future Project source of truth should own conversations, assets, storyboard ma
 
 The direct YouTube implementation remains the only built Studio publishing path. It requires per-upload approval and forces private visibility.
 
-MuAPI's official Social Publishing documentation was checked on 2026-08-27. It documents current REST endpoints for account listing, per-platform connect URLs, Instagram publishing, TikTok publishing, and prediction polling. It also documents multiple accounts. Those endpoints are **verified but not implemented in this branch** because publishing costs money and needs a separate secure server adapter, review UI, connection lifecycle, and mocked security tests.
-
-The official REST page does not document `scheduled_at`, scheduled-post listing, cancellation, or updates. MuAPI's MCP page advertises those operations only for CLI stdio. Creator Studio therefore must not invent REST scheduling. Scheduling remains **not available** until an official usable REST/OpenAPI contract is verified.
+MuAPI's official MCP documentation was checked on 2026-08-28. It lists account connection, account listing, publish, `scheduled_at`, post listing, and cancellation as **CLI stdio-only** social tools. The hosted HTTP MCP transport explicitly excludes social tools, and the public documentation reviewed in this audit did not expose a complete Vercel-safe REST/OpenAPI request contract. Instagram/TikTok publishing and scheduling therefore remain **not implemented**. Creator Studio will not run a local CLI subprocess in Vercel or invent REST schemas.
 
 Future Instagram/TikTok implementation must use:
 
@@ -108,13 +120,13 @@ Browser
 | Integrated shell/navigation | Yes, feature branch | No provider change required | Automated source/routes + production build | No; not deployed or browser-smoked |
 | Selena secure reasoning UI | Yes | Inherits Brain status | Route/security tests; no new live reasoning request | No |
 | Agent Blueprints role/routes | Yes | Requires legacy BYOK for MuAPI data | Automated route tests | No live create/chat test |
-| Graphic Studio wrapper | Yes | Requires legacy BYOK | Compile/source integration tests | No live editor E2E |
+| Graphic Studio wrapper | Yes | Core asset editing opens without BYOK; CreativeCanvas AI remains legacy BYOK | Compile/source integration tests | No live editor E2E |
 | Storyboard | Yes | Inherits MuAPI status | Pure state/request/routing tests | No live Storyboard generation on this branch |
 | Workflow | Preserved | Requires legacy BYOK | Production build only in this pass | Not claimed |
 | Browser-session Assets | Yes | No new environment | Automated handoff checks | No durable asset service |
 | YouTube | Preserved | Environment-specific | Existing security tests; no live publish | No new claim |
-| Instagram | No; official REST contract verified | Not configured | Not tested | No |
-| TikTok | No; official REST contract verified | Not configured | Not tested | No |
+| Instagram | No verified Vercel REST contract | Not configured | Not tested | No |
+| TikTok | No verified Vercel REST contract | Not configured | Not tested | No |
 | Social scheduling | No REST contract verified | No | No | No |
 | MuAPI media | Existing | Environment-specific | Existing retained evidence; no paid request here | Sandbox scope only where configured |
 | Runway | Adapter preserved/deferred | Key optional | No paid test | No |
@@ -140,4 +152,3 @@ This branch does not alter any environment value. It does not enable paid genera
 4. Implement mocked and security-reviewed MuAPI Instagram/TikTok routes, then connection UI and review-only publish drafts.
 5. Verify an official REST scheduling schema before adding scheduling.
 6. Build a compositor only after defining a versioned timeline manifest, media normalization, render jobs, storage, cancellation, and export authorization.
-

@@ -9,7 +9,7 @@ import {
 } from 'studio';
 import {
   Blocks, Bot, Boxes, ChevronDown, Clapperboard, Film, FolderOpen, Home, Image,
-  LayoutGrid, Menu, Mic2, PanelLeftClose, PanelLeftOpen, Send, Settings2, Share2,
+  LayoutGrid, Menu, Mic2, Music2, PanelLeftClose, PanelLeftOpen, Send, Settings2, Share2,
   Sparkles, UserRound, WandSparkles, Workflow, X, Zap,
 } from 'lucide-react';
 import CreatorHome from './CreatorHome';
@@ -23,7 +23,7 @@ const NAV_GROUPS = [
   { label: '', items: ['home'] },
   { label: 'Agent', items: ['selena'] },
   { label: 'Tools', items: ['image', 'video', 'audio', 'graphics', 'avatar', 'music', 'video-advanced', 'lipsync', 'motion', 'transform', 'smart-clip'] },
-  { label: 'Apps', items: ['generator', 'influencer', 'graphic-studio', 'scene-builder', 'marketing', 'edit-studio'] },
+  { label: 'Apps', items: ['generator', 'influencer', 'graphic-studio', 'scene-builder', 'music-video', 'marketing', 'edit-studio'] },
   { label: '', items: ['workflows', 'assets', 'publish'] },
   { label: 'Advanced', items: ['agent-blueprints', 'marketplace', 'provider-settings'] },
 ];
@@ -32,13 +32,13 @@ const ICONS = {
   avatar: UserRound, music: Mic2, 'video-advanced': Film,
   lipsync: Mic2, motion: Zap, transform: Sparkles, 'smart-clip': Clapperboard,
   generator: WandSparkles, influencer: UserRound, 'graphic-studio': LayoutGrid,
-  'scene-builder': Boxes, marketing: Send, 'edit-studio': Clapperboard,
+  'scene-builder': Boxes, 'music-video': Music2, marketing: Send, 'edit-studio': Clapperboard,
   workflows: Workflow, assets: FolderOpen, publish: Share2, 'agent-blueprints': Blocks,
   marketplace: Boxes, 'provider-settings': Settings2,
 };
 const LEGACY_DESTINATIONS = new Set([
-  'graphics', 'music', 'video-advanced', 'lipsync', 'motion', 'transform', 'smart-clip', 'influencer',
-  'graphic-studio', 'marketing', 'edit-studio', 'workflows', 'agent-blueprints', 'marketplace',
+  'music', 'video-advanced', 'lipsync', 'motion', 'transform', 'smart-clip', 'influencer',
+  'marketing', 'edit-studio', 'workflows', 'agent-blueprints', 'marketplace',
 ]);
 
 function loadAssets() {
@@ -153,7 +153,12 @@ export default function StandaloneShell() {
   }), [apiKey, callbacks, destinationId, droppedFiles]);
   const openAsset = useCallback((asset, target) => {
     setHandoffAsset(asset);
-    navigate(target === 'scene-builder' ? '/studio/apps/scene-builder' : '/studio/tools/lip-sync');
+    const targets = {
+      'graphic-studio': '/studio/apps/graphic-studio',
+      'scene-builder': '/studio/apps/scene-builder',
+      'lipsync': '/studio/tools/lip-sync',
+    };
+    navigate(targets[target] || '/studio/assets');
   }, [navigate]);
 
   const renderDestination = () => {
@@ -168,10 +173,11 @@ export default function StandaloneShell() {
       case 'video-advanced': return slug.includes('cinema') ? <CinemaStudio {...legacyShared} /> : <VideoStudio {...legacyShared} />;
       case 'generator': return <CreatorStudio {...callbacks('generator')} initialToolId="image" allowedToolIds={['image', 'video']} initialAsset={handoffAsset} workspaceLabel="AI Generator" />;
       case 'scene-builder': return <CreatorStudio {...callbacks('scene-builder')} initialToolId="storyboard" allowedToolIds={['storyboard']} initialAsset={handoffAsset} workspaceLabel="Scene Builder" />;
+      case 'music-video': return <CreatorStudio {...callbacks('music-video')} initialToolId="storyboard" allowedToolIds={['storyboard']} initialAsset={handoffAsset} workspaceLabel="Music Video" />;
       case 'publish': return <CreatorStudio {...callbacks('publish')} initialToolId="publish" allowedToolIds={['publish']} workspaceLabel="Publish" />;
       case 'assets': return <StudioAssets assets={assets} onOpen={openAsset} onDelete={(id) => setAssets((previous) => previous.filter((asset) => asset.id !== id))} />;
       case 'graphics':
-      case 'graphic-studio': return <GraphicStudio {...legacyShared} isHeaderVisible={isHeaderVisible} onToggleHeader={setIsHeaderVisible} />;
+      case 'graphic-studio': return <GraphicStudio {...legacyShared} initialAsset={handoffAsset} isHeaderVisible={isHeaderVisible} onToggleHeader={setIsHeaderVisible} />;
       case 'lipsync': return <LipSyncStudio {...legacyShared} initialAsset={handoffAsset} />;
       case 'motion': return <VibeMotionStudio {...legacyShared} />;
       case 'transform': return <RecastStudio {...legacyShared} />;

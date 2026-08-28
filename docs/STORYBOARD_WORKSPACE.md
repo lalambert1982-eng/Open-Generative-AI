@@ -21,7 +21,7 @@ This document defines the first project-based Creator Studio UX pass. It records
 | Image → Video bridge | Yes — existing `POST /api/creator/video` with `firstFrameUrl` | Inherits MuAPI status | First-frame request and server I2V-selection tests | No — Storyboard E2E pending |
 | Scene transitions | UI metadata only | Not applicable | Scene-state test | No compositor; not rendered |
 | Final export | Planned/disabled | Not applicable | Not tested | No |
-| Graphic Studio | Yes — reuses CreativeCanvas, ImageStudio/DrawModal, and LayersStudio | Legacy BYOK required pending secure migration | Compile/source integration tests only | No |
+| Graphic Studio | Yes — reuses CreativeCanvas, ImageStudio/DrawModal, and LayersStudio | Core asset editing requires no key; CreativeCanvas AI retains isolated legacy BYOK pending migration | Compile/source integration tests only | No |
 
 No deployment, Production environment edit, paid-generation activation, or provider request is part of this patch.
 
@@ -54,6 +54,8 @@ The workspace supports:
 - show per-scene working and error states.
 
 The local asset panel does not reuse `DrawModal.jsx`'s browser-key upload/generation path. No secure Creator Studio upload route currently provides a provider-reachable first-frame URL, so Upload is explicitly disabled/planned rather than creating a second backend.
+
+The shell-level Asset library can pass an already generated HTTPS image directly into Graphic Studio, Scene Builder, and Lip Sync. Music Video is a Storyboard-backed entry point and does not imply a finished compositor or audio mix.
 
 ## AI Engine: Auto
 

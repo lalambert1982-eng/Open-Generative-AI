@@ -465,13 +465,13 @@ Pick the entry point that matches your goal:
 
 ```bash
 # Clone the repository (with submodules — required for the workflow + agent packages)
-git clone --recurse-submodules https://github.com/Anil-matcha/Open-Generative-AI.git
+git clone --recurse-submodules https://github.com/lalambert1982-eng/Open-Generative-AI.git
 cd Open-Generative-AI
 
 # If you already cloned without --recurse-submodules, run this once:
 # git submodule update --init --recursive
 
-# Install dependencies + build workspace packages (studio, workflow, agents).
+# Install dependencies + build workspace packages (workflow, agents, design agent, studio).
 # This step is REQUIRED — `npm install` alone is not enough; the workspaces
 # need to be built before either dev script will work.
 npm run setup
@@ -483,7 +483,7 @@ npm run dev            # Hosted web version (Next.js) → http://localhost:3000
 
 You'll be prompted to enter your Muapi API key on first use (skip the key if you only plan to use local models).
 
-> **Troubleshooting — `Couldn't find a 'pages' directory`**: this means Next.js can't see the `app/` folder. Confirm you're running `npm run dev` from the repo root (the directory that contains `app/`, `package.json`, and `next.config.mjs`), and that you cloned with submodules. Re-run `npm run setup` if `packages/Vibe-Workflow` or `packages/agents` are empty.
+> **Troubleshooting — `Couldn't find a 'pages' directory`**: this means Next.js can't see the `app/` folder. Confirm you're running `npm run dev` from the repo root (the directory that contains `app/`, `package.json`, and `next.config.mjs`), and that you cloned with submodules. Re-run `npm run setup` if `packages/Vibe-Workflow`, `packages/Open-Poe-AI`, or `packages/Open-AI-Design-Agent` is empty. These are build-time source dependencies; they do not need runtime GitHub API tokens.
 
 ### Production Build
 
