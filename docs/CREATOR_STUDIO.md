@@ -22,6 +22,7 @@ Creator Studio is the private creative operating-system shell. Selena is its pri
 | Avatar video | HeyGen | `HEYGEN_API_KEY`, `HEYGEN_AVATAR_ID`, `HEYGEN_VOICE_ID` |
 | Storyboard text/image-to-video | MuAPI | Sandbox: `MUAPI_API_KEY`; paid Production: `MUAPI_PRODUCTION_API_KEY`; plus `MUAPI_KEY_MODE` and `MUAPI_ALLOW_PAID_GENERATION` |
 | Manual private publishing | YouTube + Vercel Blob | `YOUTUBE_OAUTH_CLIENT_ID`, `YOUTUBE_OAUTH_CLIENT_SECRET`, `YOUTUBE_OAUTH_CALLBACK_URL`, `YOUTUBE_TOKEN_ENCRYPTION_KEY`, `BLOB_READ_WRITE_TOKEN` |
+| Instagram/TikTok publishing | MuAPI Social | `MUAPI_SOCIAL_API_KEY` or `MUAPI_PRODUCTION_API_KEY`; `MUAPI_ALLOW_SOCIAL_PUBLISHING`; optional host/public-TikTok controls |
 
 The direct OpenAI image and Runway video adapters remain in the repository as deferred compatibility boundaries. They are not reachable from the active private Creator Studio dispatch or UI.
 
@@ -156,6 +157,24 @@ Private Blob storage, data transfer, Vercel function execution, and YouTube API 
 
 Treat `YOUTUBE_TOKEN_ENCRYPTION_KEY` as permanent deployment infrastructure. Changing or losing it makes the stored connection unreadable; disconnect/revoke the old Google authorization and reconnect after an intentional rotation.
 
+## Configure Instagram and TikTok publishing
+
+The unified Publish workspace uses MuAPI's documented Social Publishing REST API for Instagram Business accounts and TikTok accounts while preserving direct YouTube OAuth in its own tab.
+
+```dotenv
+MUAPI_SOCIAL_API_KEY=<recommended dedicated server-only key>
+# If omitted, source falls back to MUAPI_PRODUCTION_API_KEY.
+MUAPI_ALLOW_SOCIAL_PUBLISHING=false
+MUAPI_TIKTOK_PUBLIC_PUBLISHING_APPROVED=false
+MUAPI_SOCIAL_ALLOWED_MEDIA_HOSTS=cdn.muapi.ai,*.muapi.ai,*.vercel-storage.com,*.heygen.ai,*.heygen.com
+```
+
+Connection and account listing are available when a valid server credential exists. Publishing remains locked until `MUAPI_ALLOW_SOCIAL_PUBLISHING=true`. Each successful publish costs `$0.01` according to MuAPI's current documentation and still requires the signed-in owner to select an Asset, review platform/account/caption/privacy/cost, check the approval box, and click **Confirm & Publish**.
+
+The server generates an opaque HMAC owner ID for MuAPI, confirms the selected account belongs to that owner and platform, sends only allowed public HTTPS media URLs, and polls the fixed prediction-result endpoint. The browser receives normalized account labels, job status, and final public URL only. TikTok posts remain `SELF_ONLY` until the TikTok application has passed the required public Direct Post audit and `MUAPI_TIKTOK_PUBLIC_PUBLISHING_APPROVED=true` is deliberately configured.
+
+Scheduling is not implemented. MuAPI documents `scheduled_at` for its MCP/CLI tool, but the verified REST Instagram and TikTok publish schemas do not document that field. Creator Studio does not guess or send it.
+
 ## Optional controls
 
 The defaults are listed in `.env.example`:
@@ -172,6 +191,10 @@ The defaults are listed in `.env.example`:
 - `MUAPI_API_KEY` is selected only when `MUAPI_KEY_MODE=sandbox`.
 - `MUAPI_PRODUCTION_API_KEY` is selected only when `MUAPI_KEY_MODE=production`.
 - `MUAPI_ALLOW_PAID_GENERATION=false` is the fail-closed default. Production mode is rejected unless this variable is deliberately changed to `true`; changing the flag alone does not select the Production credential.
+- `MUAPI_ALLOW_SOCIAL_PUBLISHING=false` independently locks paid external publishing without changing media-generation mode.
+- `MUAPI_SOCIAL_API_KEY` optionally isolates social access; if absent, the server falls back to `MUAPI_PRODUCTION_API_KEY`.
+- `MUAPI_TIKTOK_PUBLIC_PUBLISHING_APPROVED=false` forces TikTok `SELF_ONLY` even when a broader privacy value is submitted.
+- `MUAPI_SOCIAL_ALLOWED_MEDIA_HOSTS` restricts provider-fetched publishing assets to reviewed public host patterns.
 - `MUAPI_IMAGE_MODEL`, `MUAPI_VIDEO_MODEL`, and `MUAPI_IMAGE_TO_VIDEO_MODEL` pin server-selected models; browser input cannot override them.
 - `OPENAI_IMAGE_DEFAULT_QUALITY=low` remains available only to the deferred direct OpenAI adapter.
 - `YOUTUBE_UPLOAD_MAX_BYTES=524288000` caps each private staged video at 500 MiB by default.

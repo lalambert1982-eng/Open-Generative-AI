@@ -39,6 +39,7 @@ export default function StudioAssets({ assets, onOpen, onDelete }) {
                     {asset.type === 'image' && <button type="button" onClick={() => onOpen?.(asset, 'graphic-studio')} className="rounded-lg border border-white/[0.1] px-3 py-2 text-[10px] font-bold text-white/60 hover:text-white"><ImageIcon size={11} className="mr-1 inline" /> Edit graphic</button>}
                     {asset.type === 'image' && <button type="button" onClick={() => onOpen?.(asset, 'scene-builder')} className="rounded-lg bg-cyan-300 px-3 py-2 text-[10px] font-black text-black"><Play size={11} className="mr-1 inline" /> Animate</button>}
                     {(asset.type === 'video' || asset.type === 'image') && <button type="button" onClick={() => onOpen?.(asset, 'lipsync')} className="rounded-lg border border-white/[0.1] px-3 py-2 text-[10px] font-bold text-white/60 hover:text-white"><Film size={11} className="mr-1 inline" /> Lip Sync</button>}
+                    {(asset.type === 'video' || asset.type === 'image') && <button type="button" onClick={() => onOpen?.(asset, 'publish')} className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.06] px-3 py-2 text-[10px] font-bold text-emerald-100"><Play size={11} className="mr-1 inline" /> Publish</button>}
                     <a href={asset.url} target="_blank" rel="noreferrer" className="rounded-lg border border-white/[0.1] px-3 py-2 text-[10px] font-bold text-white/60 hover:text-white">Open</a>
                   </div>
                 </div>

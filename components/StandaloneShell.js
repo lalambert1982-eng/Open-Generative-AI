@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import {
   AgentStudio, AiInfluencerStudio, AppsStudio, AudioStudio, CinemaStudio,
   ClippingStudio, CreatorStudio, GraphicStudio, LipSyncStudio, MarketingStudio,
-  RecastStudio, VibeMotionStudio, VideoStudio, WorkflowStudio, getUserBalance,
+  RecastStudio, SocialPublishStudio, VibeMotionStudio, VideoStudio, WorkflowStudio, getUserBalance,
 } from 'studio';
 import {
   Blocks, Bot, Boxes, ChevronDown, Clapperboard, Film, FolderOpen, Home, Image,
@@ -157,6 +157,7 @@ export default function StandaloneShell() {
       'graphic-studio': '/studio/apps/graphic-studio',
       'scene-builder': '/studio/apps/scene-builder',
       'lipsync': '/studio/tools/lip-sync',
+      'publish': '/studio/publish',
     };
     navigate(targets[target] || '/studio/assets');
   }, [navigate]);
@@ -174,7 +175,7 @@ export default function StandaloneShell() {
       case 'generator': return <CreatorStudio {...callbacks('generator')} initialToolId="image" allowedToolIds={['image', 'video']} initialAsset={handoffAsset} workspaceLabel="AI Generator" />;
       case 'scene-builder': return <CreatorStudio {...callbacks('scene-builder')} initialToolId="storyboard" allowedToolIds={['storyboard']} initialAsset={handoffAsset} workspaceLabel="Scene Builder" />;
       case 'music-video': return <CreatorStudio {...callbacks('music-video')} initialToolId="storyboard" allowedToolIds={['storyboard']} initialAsset={handoffAsset} workspaceLabel="Music Video" />;
-      case 'publish': return <CreatorStudio {...callbacks('publish')} initialToolId="publish" allowedToolIds={['publish']} workspaceLabel="Publish" />;
+      case 'publish': return <SocialPublishStudio initialAsset={handoffAsset} youtubeWorkspace={<CreatorStudio {...callbacks('publish')} initialToolId="publish" allowedToolIds={['publish']} workspaceLabel="YouTube Publish" />} />;
       case 'assets': return <StudioAssets assets={assets} onOpen={openAsset} onDelete={(id) => setAssets((previous) => previous.filter((asset) => asset.id !== id))} />;
       case 'graphics':
       case 'graphic-studio': return <GraphicStudio {...legacyShared} initialAsset={handoffAsset} isHeaderVisible={isHeaderVisible} onToggleHeader={setIsHeaderVisible} />;

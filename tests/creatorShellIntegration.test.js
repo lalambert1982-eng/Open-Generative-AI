@@ -74,3 +74,20 @@ test('Music Video reuses the real Storyboard workspace and Workflow exits withou
     assert.doesNotMatch(workflow, /window\.location\.reload|fromWorkflowBuilder/);
     assert.doesNotMatch(workflowUi, /fromWorkflowBuilder|sessionStorage/);
 });
+
+test('unified Publish preserves direct YouTube and adds secure Asset handoff for Instagram and TikTok', async () => {
+    const shell = await read('../components/StandaloneShell.js');
+    const assets = await read('../components/StudioAssets.js');
+    const social = await read('../packages/studio/src/components/SocialPublishStudio.jsx');
+    const route = await read('../app/api/social/muapi/[[...path]]/route.js');
+    assert.match(shell, /<SocialPublishStudio initialAsset=\{handoffAsset\}/);
+    assert.match(shell, /youtubeWorkspace=\{<CreatorStudio/);
+    assert.match(shell, /'publish': '\/studio\/publish'/);
+    assert.match(assets, /onOpen\?\.\(asset, 'publish'\)/);
+    assert.match(social, /Review Publish/);
+    assert.match(social, /approved: true/);
+    assert.match(social, /Scheduling is not available/);
+    assert.doesNotMatch(social, /MUAPI_(?:SOCIAL_|PRODUCTION_)?API_KEY|x-api-key/);
+    assert.match(route, /authorizeCreatorRequest/);
+    assert.match(route, /evaluateJsonSafety/);
+});

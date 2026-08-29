@@ -24,8 +24,8 @@ The shell now organizes working destinations as:
 - **Tools:** secure Image, Video, Voice, and Avatar plus preserved legacy Music, Advanced Video, Lip Sync, Motion Graphics, Transform, and Smart Clip.
 - **Apps:** AI Generator, AI Influencer, Graphic Studio, Scene Builder, Music Video, Marketing Studio, and Edit Studio.
 - **Workflows:** the existing MuAPI workflow list, playground, and builder.
-- **Assets:** browser-session generated URLs with working Scene Builder and Lip Sync handoffs.
-- **Publish:** the existing direct private YouTube workflow.
+- **Assets:** browser-session generated URLs with working Graphic Studio, Scene Builder, Lip Sync, and Publish handoffs.
+- **Publish:** unified Instagram/TikTok review through MuAPI Social plus the preserved direct private YouTube workflow.
 - **Advanced:** Agent Blueprints, Marketplace/Developer Templates, and legacy provider settings.
 
 Projects are intentionally absent from primary navigation because `main` has no durable Project source of truth. A cosmetic empty page would misrepresent product state. Music Video reuses the real Storyboard workspace as a scene-planning app; it does not claim music-track mixing or final video composition.
@@ -54,6 +54,7 @@ GitHub CI and CodeQL use `actions/checkout` with `submodules: recursive`. Local 
 | Agent Blueprints | Existing `AgentStudio` and generic MuAPI Agent endpoints |
 | Video utilities | Existing Lip Sync, Vibe Motion, Recast, Clipping, Video, and Cinema components |
 | YouTube | Existing direct OAuth, private Blob staging, encrypted token storage, approval gate, and forced-private publishing |
+| Instagram/TikTok | New server-only MuAPI Social adapter; opaque owner mapping, account connection/listing, explicit review, fixed publish endpoints, and prediction polling |
 
 ## Selena boundary
 
@@ -91,17 +92,17 @@ The browser cannot select provider keys or arbitrary model IDs. The UI reports *
 
 ## Assets and projects
 
-The shell records successful HTTPS generation outputs in `sessionStorage` for the current browser session. An image can enter Graphic Studio or Scene Builder without copying a URL; image/video assets can populate Lip Sync without re-uploading. This is a working handoff, but it is not a durable multi-device Asset service. Voice, avatar, upload, publish-draft, and multi-device persistence remain future work.
+The shell records successful HTTPS generation outputs in `sessionStorage` for the current browser session. An image can enter Graphic Studio or Scene Builder without copying a URL; image/video assets can populate Lip Sync or the unified Publish review without re-uploading. This is a working handoff, but it is not a durable multi-device Asset service. Voice, avatar, upload, publish-draft, and multi-device persistence remain future work.
 
 A future Project source of truth should own conversations, assets, storyboard manifests, workflow references, outputs, and publish drafts. It needs explicit ownership, versioning, retention, deletion, and storage rules before implementation.
 
 ## Publish and current social API verification
 
-The direct YouTube implementation remains the only built Studio publishing path. It requires per-upload approval and forces private visibility.
+The direct YouTube implementation remains preserved. It requires per-upload approval and forces private visibility.
 
-MuAPI's official MCP documentation was checked on 2026-08-28. It lists account connection, account listing, publish, `scheduled_at`, post listing, and cancellation as **CLI stdio-only** social tools. The hosted HTTP MCP transport explicitly excludes social tools, and the public documentation reviewed in this audit did not expose a complete Vercel-safe REST/OpenAPI request contract. Instagram/TikTok publishing and scheduling therefore remain **not implemented**. Creator Studio will not run a local CLI subprocess in Vercel or invent REST schemas.
+MuAPI's official Social Publishing REST documentation was rechecked on 2026-08-28 and now documents end-user connection URLs, account listing, fixed Instagram/TikTok publish endpoints, and standard prediction-result polling. The new implementation uses those documented paths. It does not expose the MuAPI credential or platform OAuth tokens to the browser. A successful publish costs `$0.01`, so `MUAPI_ALLOW_SOCIAL_PUBLISHING=true` and a per-post review checkbox are both required.
 
-Future Instagram/TikTok implementation must use:
+Implemented Instagram/TikTok architecture:
 
 ```text
 Browser
@@ -112,6 +113,8 @@ Browser
   → explicit approval
   → async publish + confirmed provider status
 ```
+
+The documented REST publish endpoints do not include `scheduled_at`. Scheduling remains unavailable; the application does not run the MCP CLI inside Vercel or invent a REST field. TikTok defaults to `SELF_ONLY` unless `MUAPI_TIKTOK_PUBLIC_PUBLISHING_APPROVED=true` confirms the application has completed the platform's public-post audit.
 
 ## Provider and feature status
 
@@ -125,8 +128,8 @@ Browser
 | Workflow | Preserved | Requires legacy BYOK | Production build only in this pass | Not claimed |
 | Browser-session Assets | Yes | No new environment | Automated handoff checks | No durable asset service |
 | YouTube | Preserved | Environment-specific | Existing security tests; no live publish | No new claim |
-| Instagram | No verified Vercel REST contract | Not configured | Not tested | No |
-| TikTok | No verified Vercel REST contract | Not configured | Not tested | No |
+| Instagram | Yes — MuAPI Social REST adapter and unified review UI | Requires server social credential + connected Business account + enable flag | Mocked request/auth/approval/poll tests only | No |
+| TikTok | Yes — MuAPI Social REST adapter and unified review UI | Requires server social credential + connected account + enable flag; public posting also requires TikTok approval | Mocked request/auth/approval/poll tests only | No |
 | Social scheduling | No REST contract verified | No | No | No |
 | MuAPI media | Existing | Environment-specific | Existing retained evidence; no paid request here | Sandbox scope only where configured |
 | Runway | Adapter preserved/deferred | Key optional | No paid test | No |
@@ -142,6 +145,8 @@ Current source in `muapiConfiguration()` is authoritative:
 - Production mode fails closed unless `MUAPI_ALLOW_PAID_GENERATION=true`.
 - Model selection remains server-side through `MUAPI_IMAGE_MODEL`, `MUAPI_VIDEO_MODEL`, and `MUAPI_IMAGE_TO_VIDEO_MODEL`.
 
+Social publishing is independent of generation mode. It uses `MUAPI_SOCIAL_API_KEY` when configured, otherwise the server-only `MUAPI_PRODUCTION_API_KEY`, and fails closed unless `MUAPI_ALLOW_SOCIAL_PUBLISHING=true`. It does not change `MUAPI_KEY_MODE` or `MUAPI_ALLOW_PAID_GENERATION`.
+
 This branch does not alter any environment value. It does not enable paid generation.
 
 ## Next architecture increments
@@ -149,6 +154,6 @@ This branch does not alter any environment value. It does not enable paid genera
 1. Add durable Project/Asset storage with ownership and retention.
 2. Migrate CreativeCanvas authentication to the Creator gateway and remove browser token compatibility.
 3. Add a Creator orchestrator contract for structured Selena plans and explicit approval cards.
-4. Implement mocked and security-reviewed MuAPI Instagram/TikTok routes, then connection UI and review-only publish drafts.
+4. Configure a Preview-only MuAPI social credential, connect test accounts, and run one separately approved private test per platform.
 5. Verify an official REST scheduling schema before adding scheduling.
 6. Build a compositor only after defining a versioned timeline manifest, media normalization, render jobs, storage, cancellation, and export authorization.
