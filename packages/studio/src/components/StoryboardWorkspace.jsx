@@ -156,11 +156,26 @@ function SceneCard({ scene, selected, onSelect, canDelete, onDuplicate, onDelete
   );
 }
 
-export default function StoryboardWorkspace({ provider, busy = false, error = "", onGenerateMedia, initialAsset = null }) {
-  const [projectName, setProjectName] = useState("Untitled Project");
+export default function StoryboardWorkspace({
+  provider,
+  busy = false,
+  error = "",
+  onGenerateMedia,
+  initialAsset = null,
+  initialAction = null,
+  project = null,
+  onStoryboardChange,
+  onProjectNameChange,
+}) {
+  const [projectName, setProjectName] = useState(project?.name || "Untitled Project");
   const [scenes, setScenes] = useState(() => [createScene(0, { id: "scene-1" })]);
   const [selectedSceneId, setSelectedSceneId] = useState("scene-1");
   const consumedAssetIdRef = useRef(null);
+  const consumedActionIdRef = useRef(null);
+  const loadedProjectIdRef = useRef(null);
+  const lastSavedStoryboardRef = useRef('');
+  const saveTimerRef = useRef(null);
+  const hydratingProjectRef = useRef(false);
 
   const selectedScene = scenes.find((scene) => scene.id === selectedSceneId) || scenes[0];
   const selectedIndex = scenes.findIndex((scene) => scene.id === selectedScene.id);
@@ -172,6 +187,49 @@ export default function StoryboardWorkspace({ provider, busy = false, error = ""
     ...(scene.imageUrl ? [{ id: `${scene.id}-image`, type: "image", url: scene.imageUrl, title: `${scene.title} still`, sceneId: scene.id }] : []),
     ...(scene.videoUrl ? [{ id: `${scene.id}-video`, type: "video", url: scene.videoUrl, title: `${scene.title} video`, sceneId: scene.id }] : []),
   ]), [scenes]);
+
+  useEffect(() => {
+    if (!project?.id || loadedProjectIdRef.current === project.id) return;
+    loadedProjectIdRef.current = project.id;
+    const storedScenes = Array.isArray(project.storyboard?.scenes) && project.storyboard.scenes.length
+      ? project.storyboard.scenes.map((scene) => ({ ...scene, status: scene.status === 'ready' ? 'ready' : scene.status === 'error' ? 'error' : 'draft' }))
+      : [createScene(0)];
+    const selected = storedScenes.some((scene) => scene.id === project.storyboard?.selectedSceneId)
+      ? project.storyboard.selectedSceneId
+      : storedScenes[0].id;
+    const manifest = { version: 1, selectedSceneId: selected, scenes: storedScenes };
+    hydratingProjectRef.current = true;
+    lastSavedStoryboardRef.current = JSON.stringify(manifest);
+    setProjectName(project.name || 'Untitled Project');
+    setScenes(storedScenes);
+    setSelectedSceneId(selected);
+  }, [project?.id, project?.name, project?.storyboard]);
+
+  useEffect(() => {
+    if (!project?.id || typeof onStoryboardChange !== 'function') return undefined;
+    const manifest = {
+      version: 1,
+      selectedSceneId,
+      scenes: scenes.map((scene) => ({
+        ...scene,
+        status: scene.status.startsWith('generating') ? (scene.imageUrl || scene.videoUrl ? 'ready' : 'draft') : scene.status,
+      })),
+    };
+    const serialized = JSON.stringify(manifest);
+    if (hydratingProjectRef.current) {
+      if (serialized === lastSavedStoryboardRef.current) hydratingProjectRef.current = false;
+      return undefined;
+    }
+    if (serialized === lastSavedStoryboardRef.current) return undefined;
+    window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(async () => {
+      const saved = await onStoryboardChange(manifest);
+      if (saved) lastSavedStoryboardRef.current = serialized;
+    }, 700);
+    return () => window.clearTimeout(saveTimerRef.current);
+  }, [onStoryboardChange, project?.id, scenes, selectedSceneId]);
+
+  useEffect(() => () => window.clearTimeout(saveTimerRef.current), []);
 
   useEffect(() => {
     if (!initialAsset?.id || consumedAssetIdRef.current === initialAsset.id) return;
@@ -188,6 +246,20 @@ export default function StoryboardWorkspace({ provider, busy = false, error = ""
         : scene
     )));
   }, [initialAsset, selectedSceneId]);
+
+  useEffect(() => {
+    const actionId = initialAction?.id || '';
+    if (!actionId || consumedActionIdRef.current === actionId || !['storyboard.create', 'storyboard.addScene'].includes(initialAction.action)) return;
+    consumedActionIdRef.current = actionId;
+    const parameters = initialAction.parameters || {};
+    setScenes((previous) => previous.map((scene) => scene.id === selectedSceneId ? {
+      ...scene,
+      prompt: parameters.prompt || scene.prompt,
+      aspectRatio: parameters.aspectRatio || scene.aspectRatio,
+      duration: parameters.duration || scene.duration,
+      imageUrl: initialAsset?.type === 'image' ? initialAsset.url : scene.imageUrl,
+    } : scene));
+  }, [initialAction, initialAsset, selectedSceneId]);
 
   const updateSelectedScene = (patch) => {
     setScenes((previous) => previous.map((scene) => (
@@ -270,7 +342,7 @@ export default function StoryboardWorkspace({ provider, busy = false, error = ""
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-300 to-violet-400 text-black"><Layers3 size={18} /></div>
           <div className="min-w-0">
             <p className="text-[9px] font-black uppercase tracking-[0.2em] text-cyan-200/55">G.FURY Create</p>
-            <input value={projectName} onChange={(event) => setProjectName(event.target.value)} maxLength={80} aria-label="Project name" className="mt-0.5 w-full min-w-0 bg-transparent text-sm font-semibold text-white outline-none placeholder:text-white/25" />
+            <input value={projectName} onChange={(event) => setProjectName(event.target.value)} onBlur={() => { const name = projectName.trim(); if (name && name !== project?.name) onProjectNameChange?.(name); }} maxLength={80} aria-label="Project name" className="mt-0.5 w-full min-w-0 bg-transparent text-sm font-semibold text-white outline-none placeholder:text-white/25" />
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">

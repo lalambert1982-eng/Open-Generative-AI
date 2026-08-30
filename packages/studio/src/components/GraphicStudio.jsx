@@ -23,7 +23,7 @@ export default function GraphicStudio({
   isHeaderVisible,
   onToggleHeader,
 }) {
-  const [mode, setMode] = useState(apiKey ? "canvas" : "image");
+  const [mode, setMode] = useState("canvas");
   const shared = {
     apiKey,
     droppedFiles,
@@ -60,16 +60,12 @@ export default function GraphicStudio({
         </div>
       </header>
 
-      {!apiKey && (
-        <div className="shrink-0 border-b border-cyan-300/10 bg-cyan-300/[0.045] px-4 py-2 text-[11px] leading-5 text-cyan-100/65 lg:px-6">
-          Existing Creator image Assets can be edited here without a provider key. Generate new AI images in the secure Image tool; Creative Canvas and legacy AI edits remain isolated until their server-route migration.
-        </div>
-      )}
+      <div className="shrink-0 border-b border-cyan-300/10 bg-cyan-300/[0.045] px-4 py-2 text-[11px] leading-5 text-cyan-100/65 lg:px-6">
+        Creative Canvas now uses the owner-authenticated Creator server adapter. No MuAPI provider credential is copied into browser storage. Legacy Generate &amp; Edit operations remain isolated where they still require BYOK.
+      </div>
 
       <div className="min-h-0 flex-1">
-        {mode === "canvas" && (apiKey
-          ? <DesignAgentStudio {...shared} />
-          : <div className="flex h-full items-center justify-center p-6"><div className="max-w-xl rounded-3xl border border-white/[0.08] bg-white/[0.025] p-7 text-center"><p className="text-xs font-black uppercase tracking-[0.2em] text-cyan-200">Legacy canvas compatibility</p><h2 className="mt-3 text-xl font-semibold">Creative Canvas still requires a session key</h2><p className="mt-3 text-sm leading-6 text-white/38">Use Generate &amp; Edit for an existing Creator asset without exposing a provider key. Creative Canvas remains isolated until its provider calls migrate behind the secure Creator gateway.</p></div></div>)}
+        {mode === "canvas" && <DesignAgentStudio {...shared} />}
         {mode === "image" && <ImageStudio {...shared} initialAsset={initialAsset} />}
         {mode === "layers" && <LayersStudio {...shared} />}
       </div>

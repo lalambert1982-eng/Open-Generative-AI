@@ -2,7 +2,7 @@
 
 The authoritative Phase 1 reconciliation and production-readiness snapshot is [`PHASE_1_STATUS.md`](./PHASE_1_STATUS.md). The current integrated shell, Selena, Graphic Studio, Agent Blueprints, Assets, and publishing boundaries are documented in [`CREATOR_STUDIO_OS.md`](./CREATOR_STUDIO_OS.md).
 
-Creator Studio is the private creative operating-system shell. Selena is its primary agent identity; Storyboard, secure direct tools, Graphic Studio, Workflows, Assets, Publish, and Advanced capabilities live beneath the shell. Storyboard combines the existing image and video paths into connected scenes; it does not replace their server routes or provider adapter. Reasoning providers are brains used by Selena and existing agents; they are not Selena and they do not execute media or publishing actions.
+Creator Studio is the private creative operating-system shell. Selena is its primary agent identity; Projects, Storyboard, secure direct tools, Graphic Studio, Workflows, durable Assets, Publish, and Advanced capabilities live beneath the shell. Storyboard combines the existing image and video paths into connected scenes; it does not replace their server routes or provider adapter. Reasoning providers are brains used by Selena and existing agents; they are not Selena and they do not execute media or publishing actions.
 
 ### Brain providers
 
@@ -28,6 +28,22 @@ The direct OpenAI image and Runway video adapters remain in the repository as de
 
 All provider credentials are read only by the Next.js server. They are never sent to the browser, returned by the provider-status endpoint, or committed to the repository.
 
+## Durable Projects and Assets
+
+Creator Projects reuse the private Vercel Blob infrastructure already required by YouTube. Configure `BLOB_READ_WRITE_TOKEN` in the target environment. `CREATOR_SESSION_SECRET` is also used to derive a non-public owner namespace from the authenticated GitHub user ID.
+
+```dotenv
+BLOB_READ_WRITE_TOKEN=<private Vercel Blob token; server-only>
+CREATOR_ASSET_UPLOAD_MAX_BYTES=262144000
+CREATOR_ASSET_ALLOWED_HOSTS=cdn.muapi.ai,*.muapi.ai,*.vercel-storage.com,*.heygen.ai,*.heygen.com
+```
+
+Project manifests are private, revisioned JSON records. They retain Project metadata, bounded Selena conversation history, Asset metadata, Storyboard state, and a versioned timeline manifest. Workflow-reference and publish-draft fields exist in the manifest, but their full UI persistence is not complete. The browser supplies a Project ID; the server resolves it only inside the authenticated owner's derived namespace.
+
+Owner uploads use `/api/creator/projects/blob-upload`. The server validates Project ownership, the exact upload prefix, allowed MIME types, and maximum size before issuing a short-lived Vercel Blob client token. Generated remote output URLs and provider metadata are validated and normalized before registration. Asset deletion requires `{ approved: true }` and removes only the exact owned Blob path recorded in the Project.
+
+The existing session-scoped Asset cache remains for backward compatibility. It is not the durable source of truth. Create or open a Project before generating or uploading media that must survive browser sessions.
+
 ## Storyboard workspace
 
 The current Storyboard UX scope and future Design/compositor boundaries are documented in [`STORYBOARD_WORKSPACE.md`](./STORYBOARD_WORKSPACE.md). The Storyboard source is **Built** on its feature branch, but it is not **Production ready** until it is reviewed, merged, deployed, and exercised end to end in an explicitly approved environment.
@@ -47,6 +63,10 @@ Selena / existing agent
 ```
 
 The internal request supports `task`, `instructions`, `context`, `mode`, `tools`, `sensitivity`, and `desiredOutput`. The normalized result contains `provider`, `model`, `text`, `structuredOutput`, `toolCalls`, `usage`, and `finishReason`. Provider-specific response shapes stay inside the adapters. A returned tool call is only a recommendation/request; the router never executes a media generation, purchase, deployment, or publication.
+
+The Creator assistant route adds a server-owned structured orchestration contract with `message`, `plan`, `suggestedActions`, `referencedAssets`, `requiresApproval`, and `estimatedSideEffects`. Only registry actions in `src/lib/selenaOrchestrator.js` survive normalization. The server derives each action's destination, accepted parameters, availability, approval requirement, and side-effect warning. Model output cannot invoke arbitrary URLs/functions or downgrade an approval gate. Selena action cards prepare/open the correct workspace; final generation, deletion, or publishing still uses that workspace's explicit execution control.
+
+When a Project ID is supplied, the server loads the Project using the authenticated owner identity. The prompt receives only bounded Project/Storyboard/Asset summaries. Browser-supplied Project context, media URLs, and provider metadata are not trusted as Selena context.
 
 The initial order is `gemini,groq,openrouter`. Anthropic remains fully supported through the existing `anthropic_assistant` compatibility boundary and can be selected with `BRAIN_PROVIDER=anthropic` or added later to `BRAIN_FALLBACK_ORDER`. It is intentionally absent from the initial fallback list.
 
@@ -195,6 +215,8 @@ The defaults are listed in `.env.example`:
 - `MUAPI_SOCIAL_API_KEY` optionally isolates social access; if absent, the server falls back to `MUAPI_PRODUCTION_API_KEY`.
 - `MUAPI_TIKTOK_PUBLIC_PUBLISHING_APPROVED=false` forces TikTok `SELF_ONLY` even when a broader privacy value is submitted.
 - `MUAPI_SOCIAL_ALLOWED_MEDIA_HOSTS` restricts provider-fetched publishing assets to reviewed public host patterns.
+- `CREATOR_ASSET_UPLOAD_MAX_BYTES=262144000` caps each durable Project Asset upload (the server clamps the value between 1 MiB and 1 GiB).
+- `CREATOR_ASSET_ALLOWED_HOSTS` restricts durable generated/remote Asset URLs to reviewed public HTTPS hosts.
 - `MUAPI_IMAGE_MODEL`, `MUAPI_VIDEO_MODEL`, and `MUAPI_IMAGE_TO_VIDEO_MODEL` pin server-selected models; browser input cannot override them.
 - `OPENAI_IMAGE_DEFAULT_QUALITY=low` remains available only to the deferred direct OpenAI adapter.
 - `YOUTUBE_UPLOAD_MAX_BYTES=524288000` caps each private staged video at 500 MiB by default.
@@ -233,7 +255,7 @@ Active routes are `POST /api/creator/image`, `POST /api/creator/video`, and `GET
 
 Credential selection follows current source in `muapiConfiguration()`, not older deployment notes: Sandbox selects `MUAPI_API_KEY`; Production selects `MUAPI_PRODUCTION_API_KEY`. `MUAPI_KEY_MODE=sandbox` enables MuAPI's `$0` mock-data path. Changing the mode to `production` does not enable paid calls by itself: the separate Production credential must be valid and `MUAPI_ALLOW_PAID_GENERATION=true` must also be set explicitly. The Brain Router never changes either value and cannot initiate a generation.
 
-The existing general Image Studio and Workflow Builder keep their secured per-tab bring-your-own-key proxy. That browser-scoped flow is separate from the private Creator Studio server-owned credential. Workflow Builder continues to display MuAPI's live cost estimate where supported and still requires an explicit user click.
+The existing general Image Studio and Workflow Builder keep their secured per-tab bring-your-own-key proxy. That browser-scoped flow is separate from the private Creator Studio server-owned credential. CreativeCanvas inside authenticated Creator Studio now uses a server credential adapter and no longer writes a MuAPI credential to browser storage. Standalone Agent and older Studio components still retain isolated BYOK code. Workflow Builder continues to display MuAPI's live cost estimate where supported and still requires an explicit user click.
 
 Live MuAPI Sandbox mock requests completed through both the existing general Studio and the private Production Creator Studio on 2026-08-26 at `$0`. The private server-owned test used deployed commit `3f18f446cb24d88c3b0b1b59ec53d944896d24c8` and completed task `8c3dc22a-f59a-4c74-abbd-587ad4c84730`. Paid generation remained disabled throughout.
 

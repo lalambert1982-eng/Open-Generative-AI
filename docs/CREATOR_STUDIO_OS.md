@@ -24,11 +24,12 @@ The shell now organizes working destinations as:
 - **Tools:** secure Image, Video, Voice, and Avatar plus preserved legacy Music, Advanced Video, Lip Sync, Motion Graphics, Transform, and Smart Clip.
 - **Apps:** AI Generator, AI Influencer, Graphic Studio, Scene Builder, Music Video, Marketing Studio, and Edit Studio.
 - **Workflows:** the existing MuAPI workflow list, playground, and builder.
-- **Assets:** browser-session generated URLs with working Graphic Studio, Scene Builder, Lip Sync, and Publish handoffs.
+- **Projects:** owner-authenticated durable manifests with recent/open/rename flows.
+- **Assets:** Project-owned generated media/uploads with Graphic Studio, Scene Builder, Lip Sync, and Publish handoffs; a session cache remains for compatibility.
 - **Publish:** unified Instagram/TikTok review through MuAPI Social plus the preserved direct private YouTube workflow.
 - **Advanced:** Agent Blueprints, Marketplace/Developer Templates, and legacy provider settings.
 
-Projects are intentionally absent from primary navigation because `main` has no durable Project source of truth. A cosmetic empty page would misrepresent product state. Music Video reuses the real Storyboard workspace as a scene-planning app; it does not claim music-track mixing or final video composition.
+Projects appear in primary navigation because this completion candidate adds a server-owned durable Project/Asset source of truth. Music Video reuses the real Storyboard workspace as a scene-planning app; it does not claim music-track mixing or final video composition.
 
 ## Source dependencies and clean checkout
 
@@ -48,19 +49,22 @@ GitHub CI and CodeQL use `actions/checkout` with `submodules: recursive`. Local 
 |---|---|
 | Selena reasoning | `CreatorStudio.jsx` → `POST /api/creator/assistant` → `handleBrainAssistant()` → `reasonWithBrain()` |
 | Image/video generation | Existing Creator gateway, `muapiCreatorProvider.js`, shared request/polling functions |
-| Storyboard | Existing feature commit and `StoryboardWorkspace.jsx`; local scene state |
+| Storyboard | Existing `StoryboardWorkspace.jsx`, Creator media request/polling bridge, and Project persistence |
 | Graphic Studio | Wrapper around `DesignAgentStudio`/`CreativeCanvas`, `ImageStudio`/`DrawModal`, and `LayersStudio` |
 | Workflow | Existing `WorkflowStudio`, `WorkflowUI`, and MuAPI workflow functions |
 | Agent Blueprints | Existing `AgentStudio` and generic MuAPI Agent endpoints |
 | Video utilities | Existing Lip Sync, Vibe Motion, Recast, Clipping, Video, and Cinema components |
 | YouTube | Existing direct OAuth, private Blob staging, encrypted token storage, approval gate, and forced-private publishing |
-| Instagram/TikTok | New server-only MuAPI Social adapter; opaque owner mapping, account connection/listing, explicit review, fixed publish endpoints, and prediction polling |
+| Instagram/TikTok | Existing server-only MuAPI Social adapter; opaque owner mapping, account connection/listing, explicit review, fixed publish endpoints, and prediction polling |
+| Projects/Assets | Existing private Vercel Blob infrastructure plus owner-derived namespaces and Creator-authenticated routes |
 
 ## Selena boundary
 
 Selena owns the conversational identity and project intent. Brain providers return normalized reasoning only. A plan or tool call does not itself spend money, publish, schedule, delete, or perform another external side effect. Existing same-origin, owner-auth, content-safety, rate-limit, timeout, and provider-error controls remain in force.
 
-The current Selena workspace has in-memory conversation history and Home-to-Selena prompt handoff. Attachments, durable conversations, durable project context, approval cards, and structured orchestration are **not yet built** in this shell pass.
+The completion candidate adds a bounded structured contract containing `message`, `plan`, `suggestedActions`, `referencedAssets`, `requiresApproval`, and `estimatedSideEffects`. The server accepts only allowlisted actions, derives destinations/approval/side-effect metadata itself, and discards arbitrary functions and URLs. Selena renders plan/action cards and opens the appropriate workspace; consequential execution remains behind that workspace's explicit control.
+
+When a Project is selected, Selena receives only server-loaded, bounded Project, Storyboard, recent-Asset, and conversation summaries. Conversation history is saved to the Project manifest. Attachments are supported through the secure Project Asset upload and handoff boundary; the route does not trust browser-supplied owner context or media metadata.
 
 ## Agent Blueprints
 
@@ -74,13 +78,13 @@ Graphic Studio is a consolidation wrapper, not a new editor. It exposes:
 2. **Generate & Edit:** existing image generation/upload plus `DrawModal` pencil, eraser, rectangles, arrows, text, inserted images, undo, redo, and export concepts.
 3. **Layers:** existing layer decomposition and composition workspace.
 
-Graphic Studio itself no longer requires a legacy key merely to open. Secure Creator image Assets can enter **Generate & Edit** and open directly in `DrawModal`. Only Creative Canvas and legacy provider-backed edits remain behind the isolated compatibility credential.
+Graphic Studio itself no longer requires a legacy key to open. Secure Creator image Assets can enter **Generate & Edit** and open directly in `DrawModal`. CreativeCanvas requests made inside authenticated Creator Studio use the secure server adapter. Older standalone Generate/Edit and Agent paths retain isolated compatibility credentials.
 
-Security limitation: `DesignAgentStudio` still copies the session-scoped BYOK credential into `localStorage.token` while CreativeCanvas is active because CreativeCanvas reads a Bearer token from that location. Cleanup remains in place on exit. This is a known legacy compatibility boundary, not the preferred Creator security model. Migration should add a Creator-authenticated server adapter to CreativeCanvas, then remove browser token compatibility without rewriting the canvas.
+Security result: `DesignAgentStudio` no longer copies a MuAPI credential into `localStorage.token`. The Creator-authenticated server adapter injects the active safe MuAPI credential only after the existing authentication and paid-generation gate. The broader repository still contains isolated BYOK request code in older Agent/Studio components; that compatibility surface remains an incremental migration item.
 
 ## Storyboard and Auto routing
 
-Storyboard remains distinct from Workflow. Scene transitions are metadata only; no compositor renders them.
+Storyboard remains distinct from Workflow. Its state persists to the selected Project. Saving generates a versioned `creator.timeline.v1` manifest, but scene transitions are metadata only and no compositor renders them.
 
 ```text
 Generate Still → /api/creator/image → MUAPI_IMAGE_MODEL
@@ -90,11 +94,11 @@ Animate Image → /api/creator/video (firstFrameUrl) → MUAPI_IMAGE_TO_VIDEO_MO
 
 The browser cannot select provider keys or arbitrary model IDs. The UI reports **AI Engine: Auto**.
 
-## Assets and projects
+## Durable Projects and Assets
 
-The shell records successful HTTPS generation outputs in `sessionStorage` for the current browser session. An image can enter Graphic Studio or Scene Builder without copying a URL; image/video assets can populate Lip Sync or the unified Publish review without re-uploading. This is a working handoff, but it is not a durable multi-device Asset service. Voice, avatar, upload, publish-draft, and multi-device persistence remain future work.
+Project manifests are private JSON records in the existing Vercel Blob infrastructure. The server derives an HMAC owner namespace from the immutable authenticated GitHub identity and session secret; it never trusts a browser owner ID. The initial schema retains Project metadata, bounded Selena conversation history, Assets, Storyboard state, a versioned timeline, and reserved workflow-reference/publish-draft arrays.
 
-A future Project source of truth should own conversations, assets, storyboard manifests, workflow references, outputs, and publish drafts. It needs explicit ownership, versioning, retention, deletion, and storage rules before implementation.
+Generated images/videos, voice outputs, and validated uploads can become durable Assets when a Project is open. Images can enter Graphic Studio or Scene Builder; image/video Assets can populate contextual media tools and Publish without copying a URL. Upload authorization is scoped to the owned Project path, allowed media types, and configured size. Asset deletion requires explicit approval and an exact recorded owned Blob path. The browser session cache remains only for compatibility when no Project is selected. Workflow-reference and publish-draft UI persistence are not complete, and this is still an owner-only—not collaborative—Project model.
 
 ## Publish and current social API verification
 
@@ -120,13 +124,14 @@ The documented REST publish endpoints do not include `scheduled_at`. Scheduling 
 
 | Area | Built | Configured | Tested | Production ready |
 |---|---|---|---|---|
-| Integrated shell/navigation | Yes, feature branch | No provider change required | Automated source/routes + production build | No; not deployed or browser-smoked |
-| Selena secure reasoning UI | Yes | Inherits Brain status | Route/security tests; no new live reasoning request | No |
+| Integrated shell/navigation | Yes, feature branch | No provider change required | Automated source/routes + production build; public existing Preview Home loaded | No; completion candidate not deployed and owner smoke incomplete |
+| Selena secure reasoning/orchestration | Yes | Inherits Brain status | Route, allowlist, approval, and context tests; no new live reasoning request | No |
 | Agent Blueprints role/routes | Yes | Requires legacy BYOK for MuAPI data | Automated route tests | No live create/chat test |
-| Graphic Studio wrapper | Yes | Core asset editing opens without BYOK; CreativeCanvas AI remains legacy BYOK | Compile/source integration tests | No live editor E2E |
-| Storyboard | Yes | Inherits MuAPI status | Pure state/request/routing tests | No live Storyboard generation on this branch |
+| Graphic Studio wrapper | Yes | Creator CreativeCanvas uses server adapter; older modes retain BYOK | Proxy/security + compile/source tests | No live editor E2E |
+| Storyboard | Yes, with Project persistence and timeline manifest | Inherits Blob/MuAPI status | State/request/routing/manifest tests | No live Storyboard generation on this branch |
+| Timeline/compositor | v1 manifest only; renderer absent | Not applicable | Manifest tests | No |
 | Workflow | Preserved | Requires legacy BYOK | Production build only in this pass | Not claimed |
-| Browser-session Assets | Yes | No new environment | Automated handoff checks | No durable asset service |
+| Durable Projects/Assets | Yes | Requires target Blob configuration | Ownership, upload-policy, persistence, deletion, and handoff tests | No live owner E2E |
 | YouTube | Preserved | Environment-specific | Existing security tests; no live publish | No new claim |
 | Instagram | Yes — MuAPI Social REST adapter and unified review UI | Requires server social credential + connected Business account + enable flag | Mocked request/auth/approval/poll tests only | No |
 | TikTok | Yes — MuAPI Social REST adapter and unified review UI | Requires server social credential + connected account + enable flag; public posting also requires TikTok approval | Mocked request/auth/approval/poll tests only | No |
@@ -149,11 +154,12 @@ Social publishing is independent of generation mode. It uses `MUAPI_SOCIAL_API_K
 
 This branch does not alter any environment value. It does not enable paid generation.
 
-## Next architecture increments
+## Remaining release increments
 
-1. Add durable Project/Asset storage with ownership and retention.
-2. Migrate CreativeCanvas authentication to the Creator gateway and remove browser token compatibility.
-3. Add a Creator orchestrator contract for structured Selena plans and explicit approval cards.
-4. Configure a Preview-only MuAPI social credential, connect test accounts, and run one separately approved private test per platform.
-5. Verify an official REST scheduling schema before adding scheduling.
-6. Build a compositor only after defining a versioned timeline manifest, media normalization, render jobs, storage, cancellation, and export authorization.
+1. Commit/push only after review, allow the feature branch Preview to deploy, and complete an owner-authenticated smoke test.
+2. Verify Preview Brain, Blob, MuAPI, ElevenLabs, HeyGen, YouTube, and Social configuration by name/status without exposing values.
+3. Run one safe real Brain reasoning request; separately approve any provider test that costs money or creates an external side effect.
+4. Migrate remaining isolated Agent/Studio BYOK code behind Creator routes incrementally.
+5. Execute a safe real Workflow before calling Workflow tested.
+6. Implement a compositor/render-job service only after selecting a runtime capable of consuming `creator.timeline.v1` with ownership, progress, cancellation, and output retention.
+7. Leave scheduling unavailable until an official REST contract exists.

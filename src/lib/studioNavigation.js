@@ -20,6 +20,7 @@ export const STUDIO_NAVIGATION = Object.freeze([
     { id: 'marketing', label: 'Marketing Studio', path: '/studio/apps/marketing', section: 'apps' },
     { id: 'edit-studio', label: 'Edit Studio', path: '/studio/apps/edit-studio', section: 'apps' },
     { id: 'workflows', label: 'Workflows', path: '/studio/workflows', section: 'primary' },
+    { id: 'projects', label: 'Projects', path: '/studio/projects', section: 'primary' },
     { id: 'assets', label: 'Assets', path: '/studio/assets', section: 'primary' },
     { id: 'publish', label: 'Publish', path: '/studio/publish', section: 'primary' },
     { id: 'agent-blueprints', label: 'Agent Blueprints', path: '/studio/advanced/agents', section: 'advanced' },
@@ -55,7 +56,7 @@ export function resolveStudioDestination(segments = []) {
     if (parts[0] === 'advanced' && parts[1] === 'providers') return 'provider-settings';
     if (parts[0] === 'tools') return STUDIO_NAVIGATION.some((item) => item.id === parts[1]) ? parts[1] : 'image';
     if (parts[0] === 'apps') return STUDIO_NAVIGATION.some((item) => item.id === parts[1]) ? parts[1] : 'generator';
-    if (['home', 'selena', 'workflows', 'assets', 'publish'].includes(parts[0])) return parts[0];
+    if (['home', 'selena', 'workflows', 'projects', 'assets', 'publish'].includes(parts[0])) return parts[0];
     return ROUTE_ALIASES[parts[0] || ''] || 'home';
 }
 

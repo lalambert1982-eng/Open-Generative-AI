@@ -1,6 +1,6 @@
 # G.FURY Creator Studio v1 — Phase 1 Status
 
-Authoritative reconciliation snapshot for `lalambert1982-eng/Open-Generative-AI`. Deployment evidence was last reconciled on 2026-08-26, including the approved Brain Router, Greg Digital Twin release, and MuAPI Creator Studio Production deployment.
+Authoritative reconciliation snapshot for `lalambert1982-eng/Open-Generative-AI`. Historical Production evidence below was last reconciled on 2026-08-26. The integrated completion candidate was audited locally on 2026-08-30 from `feature/integrated-creator-shell` at starting HEAD `b93226c282974bc4704b39550bb8039038f4b76a`.
 
 This document distinguishes four independent states:
 
@@ -11,17 +11,29 @@ This document distinguishes four independent states:
 
 Configuration is not implementation. A provider with a missing API key remains **Built — configuration required**.
 
-## Storyboard UX candidate — Built locally, not deployed
+## Integrated completion candidate — Built locally, not deployed
 
-The `feature/storyboard-workspace` candidate replaces the separate private Image/Video screens with one local-state project workspace while retaining the existing routes and MuAPI provider adapter. It adds scene management, generated-asset previews, Auto text/image-to-video request shaping, previous-scene continuation, and transition metadata. It does not add persistence, provider switching, uploads, a compositor, final export, or Design mode.
+The current `feature/integrated-creator-shell` candidate completes the smallest secure integration slice without rebuilding the providers or creative tools:
+
+- Selena returns an allowlisted structured plan with server-derived approval and side-effect metadata.
+- Owner-authenticated Projects and Assets persist through private Vercel Blob manifests when `BLOB_READ_WRITE_TOKEN` is configured.
+- Generated media, uploads, voice, Graphic Studio, Storyboard, contextual tools, and Publish share Project Asset handoffs.
+- Embedded CreativeCanvas uses the authenticated Creator server adapter and no longer writes the MuAPI credential to browser storage.
+- Storyboards persist to a selected Project and produce a versioned `creator.timeline.v1` manifest.
+- Timeline transitions remain metadata; no compositor/render worker or finished Music Video export is claimed.
 
 | Candidate area | Built | Configured | Tested | Production Ready |
 |---|---|---|---|---|
-| Storyboard interface and scene logic | Yes — local candidate | Reuses existing status; no environment change | Automated tests and Studio compilation only | No — not deployed or live-tested |
-| Transition controls | Metadata only | Not applicable | State logic only | No — no compositor |
-| Design mode and final compositor | Planned only | Not applicable | Not tested | No |
+| Integrated Creator shell | Yes — local candidate | Existing Preview only; completion candidate not deployed | 21 shell tests and production build | No |
+| Selena structured orchestration | Yes | Brain credentials not re-verified | Allowlist/approval tests; no real Brain request | No |
+| Durable Projects and Assets | Yes | Requires target `BLOB_READ_WRITE_TOKEN`; not re-verified through owner session | Ownership/persistence tests only | No |
+| Graphic Studio secure canvas bridge | Yes | Inherits server MuAPI configuration | Proxy/security tests only | No |
+| Storyboard and timeline manifest | Yes | Inherits Project/Blob and MuAPI status | Scene/request/manifest tests only | No |
+| Transition rendering / final compositor | No — manifest boundary only | Not applicable | Not tested | No |
 
-See [`STORYBOARD_WORKSPACE.md`](./STORYBOARD_WORKSPACE.md) for the exact scope and future architecture. This candidate must stop before deployment and requires explicit approval for any later Preview/Production promotion.
+Final local verification: `npm run test:security` passed 112/112, `node --test tests/*.test.js` passed 38/38, `npm run test:creator-shell` passed 21/21, and the complete workspace/Next production build passed. The existing deployed Preview loaded the public integrated Home shell, but owner authentication could not be completed because the secure browser transport reset. No completion code was pushed or deployed, no environment was changed, and no paid/provider side effect occurred.
+
+See [`CREATOR_STUDIO_OS.md`](./CREATOR_STUDIO_OS.md) and [`STORYBOARD_WORKSPACE.md`](./STORYBOARD_WORKSPACE.md) for current architecture and exact boundaries. Preview promotion still requires explicit approval.
 
 ## Brain Router release — Production deployed
 

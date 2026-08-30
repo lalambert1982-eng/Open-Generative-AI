@@ -6,7 +6,7 @@ const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
 test('Selena remains on the secure Creator assistant route and does not use MuAPI Agent chat', async () => {
     const creator = await read('../packages/studio/src/components/CreatorStudio.jsx');
-    assert.match(creator, /request\("assistant", \{ method: "POST"/);
+    assert.match(creator, /request\("assistant",\s*\{[\s\S]*?method: "POST"/);
     assert.match(creator, /fetch\(`\/api\/creator\/\$\{path\}`/);
     assert.doesNotMatch(creator, /sendAgentChatMessage/);
 });
@@ -25,11 +25,51 @@ test('Graphic Studio consolidates existing canvas, image editor, and layer compo
     assert.match(graphic, /DesignAgentStudio/);
     assert.match(graphic, /ImageStudio/);
     assert.match(graphic, /LayersStudio/);
-    assert.match(graphic, /apiKey \? "canvas" : "image"/);
+    assert.match(graphic, /mode === "canvas"/);
+    assert.match(graphic, /owner-authenticated Creator server adapter/i);
     assert.match(graphic, /initialAsset=\{initialAsset\}/);
     assert.match(image, /initialAsset\?\.type !== "image"/);
     assert.match(image, /Use the secure Creator Image tool to generate/);
     assert.match(draw, /initialImageUrl/);
+});
+
+test('Projects and Assets use the authenticated durable Project API with owner-scoped handoff', async () => {
+    const shell = await read('../components/StandaloneShell.js');
+    const projects = await read('../components/ProjectsStudio.js');
+    const assets = await read('../components/StudioAssets.js');
+    const projectRoute = await read('../src/lib/creatorProjectRoutes.js');
+    assert.match(shell, /fetch\(`\/api\/creator\/projects\$\{path\}`/);
+    assert.match(shell, /case 'projects': return <ProjectsStudio/);
+    assert.match(shell, /saveProjectStoryboard/);
+    assert.match(shell, /saveProjectConversation/);
+    assert.match(shell, /recordAsset/);
+    assert.match(projects, /New Project/);
+    assert.match(projects, /Recent Projects/);
+    assert.match(assets, /Upload Asset/);
+    assert.match(projectRoute, /authorizeCreatorRequest/);
+    assert.match(projectRoute, /getCreatorProject\(user, payload\.projectId/);
+});
+
+test('Selena renders structured plans and approval-aware action cards', async () => {
+    const creator = await read('../packages/studio/src/components/CreatorStudio.jsx');
+    assert.match(creator, /data\.suggestedActions/);
+    assert.match(creator, /message\.plan/);
+    assert.match(creator, /action\.requiresApproval/);
+    assert.match(creator, /Review action/);
+    assert.match(creator, /Cancel/);
+    assert.match(creator, /projectId: project\?\.id/);
+    assert.doesNotMatch(creator, /project:\s*project/);
+});
+
+test('Storyboard persistence produces a versioned timeline boundary without claiming rendered transitions', async () => {
+    const storyboard = await read('../packages/studio/src/components/StoryboardWorkspace.jsx');
+    const timeline = await read('../src/lib/creatorTimeline.js');
+    assert.match(storyboard, /onStoryboardChange/);
+    assert.match(storyboard, /project\.storyboard/);
+    assert.match(timeline, /CREATOR_TIMELINE_VERSION = 1/);
+    assert.match(timeline, /rendered: false/);
+    assert.match(timeline, /status: 'not-requested'/);
+    assert.doesNotMatch(timeline, /ffmpeg|renderVideo|composeVideo/);
 });
 
 test('legacy Agent Builder routes through Studio-contained Agent Blueprints paths', async () => {

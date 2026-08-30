@@ -1,7 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { upload as uploadBlob } from '@vercel/blob/client';
 import {
   AgentStudio, AiInfluencerStudio, AppsStudio, AudioStudio, CinemaStudio,
   ClippingStudio, CreatorStudio, GraphicStudio, LipSyncStudio, MarketingStudio,
@@ -14,17 +15,19 @@ import {
 } from 'lucide-react';
 import CreatorHome from './CreatorHome';
 import LegacyProviderSettings from './LegacyProviderSettings';
+import ProjectsStudio from './ProjectsStudio';
 import StudioAssets from './StudioAssets';
 import { resolveStudioDestination, studioDestination } from '@/src/lib/studioNavigation.js';
 
 const STORAGE_KEY = 'muapi_key';
 const ASSET_STORAGE_KEY = 'gfury_creator_assets_v1';
+const CURRENT_PROJECT_STORAGE_KEY = 'gfury_creator_project_v1';
 const NAV_GROUPS = [
   { label: '', items: ['home'] },
   { label: 'Agent', items: ['selena'] },
   { label: 'Tools', items: ['image', 'video', 'audio', 'graphics', 'avatar', 'music', 'video-advanced', 'lipsync', 'motion', 'transform', 'smart-clip'] },
   { label: 'Apps', items: ['generator', 'influencer', 'graphic-studio', 'scene-builder', 'music-video', 'marketing', 'edit-studio'] },
-  { label: '', items: ['workflows', 'assets', 'publish'] },
+  { label: '', items: ['workflows', 'projects', 'assets', 'publish'] },
   { label: 'Advanced', items: ['agent-blueprints', 'marketplace', 'provider-settings'] },
 ];
 const ICONS = {
@@ -33,7 +36,7 @@ const ICONS = {
   lipsync: Mic2, motion: Zap, transform: Sparkles, 'smart-clip': Clapperboard,
   generator: WandSparkles, influencer: UserRound, 'graphic-studio': LayoutGrid,
   'scene-builder': Boxes, 'music-video': Music2, marketing: Send, 'edit-studio': Clapperboard,
-  workflows: Workflow, assets: FolderOpen, publish: Share2, 'agent-blueprints': Blocks,
+  workflows: Workflow, projects: FolderOpen, assets: Boxes, publish: Share2, 'agent-blueprints': Blocks,
   marketplace: Boxes, 'provider-settings': Settings2,
 };
 const LEGACY_DESTINATIONS = new Set([
@@ -50,10 +53,44 @@ function loadAssets() {
 }
 
 function inferAssetType(value, source) {
-  if (['image', 'video', 'audio'].includes(value?.type)) return value.type;
+  if (['image', 'video', 'audio', 'voice', 'music', 'avatar', 'graphic', 'upload'].includes(value?.type)) return value.type;
   if (['video', 'lipsync', 'motion', 'transform', 'smart-clip', 'edit-studio', 'scene-builder'].includes(source)) return 'video';
   if (source === 'audio') return 'audio';
   return 'image';
+}
+
+async function projectRequest(path = '', { method = 'GET', body } = {}) {
+  const response = await fetch(`/api/creator/projects${path}`, {
+    method,
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: body ? { 'content-type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const value = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(value.error || `Project request failed (${response.status}).`);
+    error.status = response.status;
+    error.code = value.code;
+    throw error;
+  }
+  return value;
+}
+
+function safeAssetFilename(value) {
+  const cleaned = String(value || 'creator-asset')
+    .normalize('NFKC')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^[^A-Za-z0-9]+/, '')
+    .slice(0, 120);
+  return cleaned || 'creator-asset';
+}
+
+function uploadAssetType(file) {
+  if (file?.type?.startsWith('image/')) return 'image';
+  if (file?.type?.startsWith('video/')) return 'video';
+  if (file?.type?.startsWith('audio/')) return 'audio';
+  return 'upload';
 }
 
 export default function StandaloneShell() {
@@ -77,11 +114,117 @@ export default function StandaloneShell() {
   const [handoffAsset, setHandoffAsset] = useState(null);
   const [notifications, setNotifications] = useState([]);
   const [generationCounts, setGenerationCounts] = useState({});
+  const [projectSummaries, setProjectSummaries] = useState([]);
+  const [currentProject, setCurrentProject] = useState(null);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [projectError, setProjectError] = useState('');
+  const [assetUploading, setAssetUploading] = useState(false);
+  const [selenaAction, setSelenaAction] = useState(null);
+  const projectMutationRef = useRef(Promise.resolve());
 
   const navigate = useCallback((path) => {
     router.push(path, { scroll: false });
     setSidebarOpen(false);
   }, [router]);
+
+  const applyCurrentProject = useCallback((project) => {
+    if (!project?.id) return;
+    setCurrentProject(project);
+    setAssets(Array.isArray(project.assets) ? project.assets : []);
+    setProjectSummaries((previous) => {
+      const summary = {
+        id: project.id,
+        name: project.name,
+        createdAt: project.createdAt,
+        updatedAt: project.updatedAt,
+        revision: project.revision,
+        assetCount: project.assets?.length || 0,
+        sceneCount: project.storyboard?.scenes?.length || 0,
+      };
+      return [summary, ...previous.filter((item) => item.id !== project.id)]
+        .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
+    });
+    try { window.localStorage.setItem(CURRENT_PROJECT_STORAGE_KEY, project.id); } catch {}
+  }, []);
+
+  const openProject = useCallback(async (projectId) => {
+    setProjectsLoading(true);
+    setProjectError('');
+    try {
+      const value = await projectRequest(`/${encodeURIComponent(projectId)}`);
+      applyCurrentProject(value.project);
+      return value.project;
+    } catch (loadError) {
+      setProjectError(loadError.message || 'Project could not be loaded.');
+      return null;
+    } finally {
+      setProjectsLoading(false);
+    }
+  }, [applyCurrentProject]);
+
+  const refreshProjects = useCallback(async (preferredProjectId = '') => {
+    setProjectsLoading(true);
+    setProjectError('');
+    try {
+      const value = await projectRequest();
+      const summaries = Array.isArray(value.projects) ? value.projects : [];
+      setProjectSummaries(summaries);
+      let selectedId = preferredProjectId;
+      if (!selectedId) {
+        try { selectedId = window.localStorage.getItem(CURRENT_PROJECT_STORAGE_KEY) || ''; } catch {}
+      }
+      if (!summaries.some((project) => project.id === selectedId)) selectedId = summaries[0]?.id || '';
+      if (selectedId) {
+        const selected = await projectRequest(`/${encodeURIComponent(selectedId)}`);
+        applyCurrentProject(selected.project);
+      } else {
+        setCurrentProject(null);
+      }
+      return summaries;
+    } catch (loadError) {
+      if (loadError.status !== 401) setProjectError(loadError.message || 'Projects could not be loaded.');
+      return [];
+    } finally {
+      setProjectsLoading(false);
+    }
+  }, [applyCurrentProject]);
+
+  const enqueueProjectMutation = useCallback((operation) => {
+    const next = projectMutationRef.current.catch(() => {}).then(operation);
+    projectMutationRef.current = next.catch(() => {});
+    return next;
+  }, []);
+
+  const createProject = useCallback(async (name) => {
+    setProjectsLoading(true);
+    setProjectError('');
+    try {
+      const value = await projectRequest('', { method: 'POST', body: { name } });
+      applyCurrentProject(value.project);
+      return value.project;
+    } catch (creationError) {
+      setProjectError(creationError.message || 'Project could not be created.');
+      return null;
+    } finally {
+      setProjectsLoading(false);
+    }
+  }, [applyCurrentProject]);
+
+  const renameProject = useCallback(async (projectId, name) => {
+    setProjectError('');
+    try {
+      const value = await enqueueProjectMutation(() => projectRequest(`/${encodeURIComponent(projectId)}`, {
+        method: 'PATCH',
+        body: { name },
+      }));
+      if (currentProject?.id === projectId) applyCurrentProject(value.project);
+      else setProjectSummaries((previous) => previous.map((project) => project.id === projectId ? { ...project, name, updatedAt: value.project.updatedAt, revision: value.project.revision } : project));
+      return value.project;
+    } catch (renameError) {
+      setProjectError(renameError.message || 'Project could not be renamed.');
+      return null;
+    }
+  }, [applyCurrentProject, currentProject?.id, enqueueProjectMutation]);
 
   useEffect(() => {
     setMounted(true);
@@ -95,6 +238,10 @@ export default function StandaloneShell() {
     }
     document.cookie = 'muapi_key=; path=/; max-age=0; SameSite=Lax';
   }, []);
+
+  useEffect(() => {
+    if (mounted) refreshProjects();
+  }, [mounted, refreshProjects]);
 
   useEffect(() => {
     if (!apiKey) return;
@@ -119,21 +266,139 @@ export default function StandaloneShell() {
     setApiKey(null); setBalance(null);
   }, []);
 
-  const recordAsset = useCallback((source) => (value = {}) => {
-    const url = typeof value.url === 'string' ? value.url : '';
-    if (url.startsWith('https://')) {
-      const asset = {
-        id: window.crypto.randomUUID(), type: inferAssetType(value, source), url,
-        title: value.title || `${studioDestination(source).label} output`, source,
-        model: value.model || null, createdAt: new Date().toISOString(),
-      };
-      setAssets((previous) => [asset, ...previous.filter((item) => item.url !== asset.url)].slice(0, 100));
+  const persistProjectAsset = useCallback(async (source, value = {}, uploadResult = null) => {
+    if (!currentProject?.id) return null;
+    const url = uploadResult?.url || (typeof value.url === 'string' ? value.url : '');
+    if (!url.startsWith('https://')) return null;
+    const body = {
+      type: inferAssetType(value, source),
+      url,
+      title: value.title || `${studioDestination(source).label} output`,
+      source,
+      storagePath: uploadResult?.pathname || null,
+      mimeType: value.mimeType || value.blob?.type || null,
+      size: value.size || value.blob?.size || 0,
+      provider: {
+        provider: typeof value.provider === 'string' ? value.provider : null,
+        model: value.model || null,
+        requestId: value.requestId || value.jobId || null,
+        keyMode: value.keyMode || null,
+      },
+    };
+    const result = await enqueueProjectMutation(() => projectRequest(`/${encodeURIComponent(currentProject.id)}/assets`, {
+      method: 'POST',
+      body,
+    }));
+    applyCurrentProject(result.project);
+    return result.asset;
+  }, [applyCurrentProject, currentProject?.id, enqueueProjectMutation]);
+
+  const recordAsset = useCallback((source) => async (value = {}) => {
+    let url = typeof value.url === 'string' ? value.url : '';
+    let uploadResult = null;
+    try {
+      if (!url.startsWith('https://') && value.blob instanceof Blob && currentProject?.id) {
+        const extension = value.blob.type === 'audio/mpeg' ? '.mp3' : '';
+        const pathname = `${currentProject.assetUploadPrefix}${window.crypto.randomUUID()}-${safeAssetFilename(value.title || `creator-audio${extension}`)}`;
+        uploadResult = await uploadBlob(pathname, value.blob, {
+          access: 'public',
+          contentType: value.blob.type || 'application/octet-stream',
+          handleUploadUrl: '/api/creator/projects/blob-upload',
+          clientPayload: JSON.stringify({ projectId: currentProject.id }),
+          multipart: value.blob.size > 5 * 1024 * 1024,
+        });
+        url = uploadResult.url;
+      }
+      if (url.startsWith('https://')) {
+        const localAsset = {
+          id: window.crypto.randomUUID(), type: inferAssetType(value, source), url,
+          title: value.title || `${studioDestination(source).label} output`, source,
+          model: value.model || null, createdAt: new Date().toISOString(),
+        };
+        setAssets((previous) => [localAsset, ...previous.filter((item) => item.url !== localAsset.url)].slice(0, 100));
+        await persistProjectAsset(source, { ...value, url }, uploadResult);
+      }
+      setNotifications((previous) => [
+        { id: `${Date.now()}-${Math.random()}`, type: 'success', label: studioDestination(source).label, url: url || null },
+        ...previous,
+      ].slice(0, 3));
+    } catch (assetError) {
+      setProjectError(`The generation completed, but its Project Asset could not be retained: ${assetError.message || 'storage failed'}`);
     }
-    setNotifications((previous) => [
-      { id: `${Date.now()}-${Math.random()}`, type: 'success', label: studioDestination(source).label, url: url || null },
-      ...previous,
-    ].slice(0, 3));
-  }, []);
+  }, [currentProject?.assetUploadPrefix, currentProject?.id, persistProjectAsset]);
+
+  const uploadProjectAsset = useCallback(async (file) => {
+    if (!file || !currentProject?.id || !currentProject.assetUploadPrefix) return;
+    setAssetUploading(true);
+    setProjectError('');
+    try {
+      const pathname = `${currentProject.assetUploadPrefix}${window.crypto.randomUUID()}-${safeAssetFilename(file.name)}`;
+      const uploaded = await uploadBlob(pathname, file, {
+        access: 'public',
+        contentType: file.type,
+        handleUploadUrl: '/api/creator/projects/blob-upload',
+        clientPayload: JSON.stringify({ projectId: currentProject.id }),
+        multipart: file.size > 5 * 1024 * 1024,
+      });
+      await persistProjectAsset('upload', {
+        type: uploadAssetType(file),
+        title: file.name,
+        url: uploaded.url,
+        mimeType: file.type,
+        size: file.size,
+      }, uploaded);
+    } catch (uploadError) {
+      setProjectError(uploadError.message || 'Asset upload failed.');
+    } finally {
+      setAssetUploading(false);
+    }
+  }, [currentProject?.assetUploadPrefix, currentProject?.id, persistProjectAsset]);
+
+  const deleteAsset = useCallback(async (assetId) => {
+    const asset = assets.find((item) => item.id === assetId);
+    if (!asset || !window.confirm(`Delete ${asset.title}? This removes the Project record and any owned uploaded Blob.`)) return;
+    if (!currentProject?.id || !currentProject.assets?.some((item) => item.id === assetId)) {
+      setAssets((previous) => previous.filter((item) => item.id !== assetId));
+      return;
+    }
+    try {
+      const result = await enqueueProjectMutation(() => projectRequest(`/${encodeURIComponent(currentProject.id)}/assets/${encodeURIComponent(assetId)}`, {
+        method: 'DELETE',
+        body: { approved: true },
+      }));
+      applyCurrentProject(result.project);
+    } catch (deleteError) {
+      setProjectError(deleteError.message || 'Asset could not be deleted.');
+    }
+  }, [applyCurrentProject, assets, currentProject?.assets, currentProject?.id, enqueueProjectMutation]);
+
+  const saveProjectStoryboard = useCallback((storyboard) => {
+    if (!currentProject?.id) return Promise.resolve(null);
+    return enqueueProjectMutation(() => projectRequest(`/${encodeURIComponent(currentProject.id)}/storyboard`, {
+      method: 'PUT',
+      body: { storyboard },
+    })).then((value) => {
+      applyCurrentProject(value.project);
+      return value.project;
+    }).catch((saveError) => {
+      setProjectError(saveError.message || 'Storyboard could not be saved.');
+      return null;
+    });
+  }, [applyCurrentProject, currentProject?.id, enqueueProjectMutation]);
+
+  const saveProjectConversation = useCallback((conversation) => {
+    if (!currentProject?.id) return Promise.resolve(null);
+    return enqueueProjectMutation(() => projectRequest(`/${encodeURIComponent(currentProject.id)}/conversation`, {
+      method: 'PUT',
+      body: { conversation },
+    })).then((value) => {
+      applyCurrentProject(value.project);
+      return value.project;
+    }).catch((saveError) => {
+      setProjectError(saveError.message || 'Selena conversation could not be saved.');
+      return null;
+    });
+  }, [applyCurrentProject, currentProject?.id, enqueueProjectMutation]);
   const reportError = useCallback((source) => (value) => {
     const message = typeof value === 'string' ? value : value?.message || 'The request failed.';
     setNotifications((previous) => [
@@ -151,6 +416,41 @@ export default function StandaloneShell() {
   const legacyShared = useMemo(() => ({
     apiKey, droppedFiles, onFilesHandled: () => setDroppedFiles(null), ...callbacks(destinationId),
   }), [apiKey, callbacks, destinationId, droppedFiles]);
+
+  const handleSelenaAction = useCallback((action) => {
+    const targets = {
+      'image.generate': '/studio/tools/image',
+      'video.generate': '/studio/tools/video',
+      'video.animate': '/studio/tools/video',
+      'graphic.open': '/studio/apps/graphic-studio',
+      'storyboard.create': '/studio/apps/scene-builder',
+      'storyboard.addScene': '/studio/apps/scene-builder',
+      'workflow.open': '/studio/workflows',
+      'asset.open': '/studio/assets',
+      'asset.delete': '/studio/assets',
+      'social.prepare': '/studio/publish',
+      'social.publish': '/studio/publish',
+    };
+    const target = targets[action?.action];
+    if (!target || action?.available === false) return;
+    const requestedAsset = action?.parameters?.assetId
+      ? assets.find((asset) => asset.id === action.parameters.assetId)
+      : null;
+    if (requestedAsset) setHandoffAsset(requestedAsset);
+    setSelenaAction(action);
+    navigate(target);
+  }, [assets, navigate]);
+
+  const creatorProjectProps = {
+    project: currentProject,
+    selectedAsset: handoffAsset,
+    initialAction: selenaAction,
+    onSelenaAction: handleSelenaAction,
+    onConversationChange: saveProjectConversation,
+    onStoryboardChange: saveProjectStoryboard,
+    onProjectNameChange: (name) => currentProject?.id && renameProject(currentProject.id, name),
+  };
+
   const openAsset = useCallback((asset, target) => {
     setHandoffAsset(asset);
     const targets = {
@@ -165,18 +465,19 @@ export default function StandaloneShell() {
   const renderDestination = () => {
     switch (destinationId) {
       case 'home': return <CreatorHome onNavigate={navigate} onAskSelena={(prompt) => { setSelenaPrompt(prompt); navigate('/studio/selena'); }} />;
-      case 'selena': return <CreatorStudio {...callbacks('selena')} initialToolId="assistant" allowedToolIds={['assistant']} initialPrompt={selenaPrompt} workspaceLabel="Selena" />;
-      case 'image': return <CreatorStudio {...callbacks('image')} initialToolId="image" allowedToolIds={['image']} workspaceLabel="Image" />;
-      case 'video': return <CreatorStudio {...callbacks('video')} initialToolId="video" allowedToolIds={['video']} initialAsset={handoffAsset} workspaceLabel="Video" />;
-      case 'audio': return <CreatorStudio {...callbacks('audio')} initialToolId="voice" allowedToolIds={['voice']} workspaceLabel="Audio & Voice" />;
-      case 'avatar': return <CreatorStudio {...callbacks('avatar')} initialToolId="avatar" allowedToolIds={['avatar']} workspaceLabel="Avatar" />;
+      case 'selena': return <CreatorStudio {...callbacks('selena')} {...creatorProjectProps} initialToolId="assistant" allowedToolIds={['assistant']} initialPrompt={selenaPrompt} workspaceLabel="Selena" />;
+      case 'image': return <CreatorStudio {...callbacks('image')} {...creatorProjectProps} initialToolId="image" allowedToolIds={['image']} workspaceLabel="Image" />;
+      case 'video': return <CreatorStudio {...callbacks('video')} {...creatorProjectProps} initialToolId="video" allowedToolIds={['video']} initialAsset={handoffAsset} workspaceLabel="Video" />;
+      case 'audio': return <CreatorStudio {...callbacks('audio')} {...creatorProjectProps} initialToolId="voice" allowedToolIds={['voice']} workspaceLabel="Audio & Voice" />;
+      case 'avatar': return <CreatorStudio {...callbacks('avatar')} {...creatorProjectProps} initialToolId="avatar" allowedToolIds={['avatar']} workspaceLabel="Avatar" />;
       case 'music': return <AudioStudio {...legacyShared} />;
       case 'video-advanced': return slug.includes('cinema') ? <CinemaStudio {...legacyShared} /> : <VideoStudio {...legacyShared} />;
-      case 'generator': return <CreatorStudio {...callbacks('generator')} initialToolId="image" allowedToolIds={['image', 'video']} initialAsset={handoffAsset} workspaceLabel="AI Generator" />;
-      case 'scene-builder': return <CreatorStudio {...callbacks('scene-builder')} initialToolId="storyboard" allowedToolIds={['storyboard']} initialAsset={handoffAsset} workspaceLabel="Scene Builder" />;
-      case 'music-video': return <CreatorStudio {...callbacks('music-video')} initialToolId="storyboard" allowedToolIds={['storyboard']} initialAsset={handoffAsset} workspaceLabel="Music Video" />;
-      case 'publish': return <SocialPublishStudio initialAsset={handoffAsset} youtubeWorkspace={<CreatorStudio {...callbacks('publish')} initialToolId="publish" allowedToolIds={['publish']} workspaceLabel="YouTube Publish" />} />;
-      case 'assets': return <StudioAssets assets={assets} onOpen={openAsset} onDelete={(id) => setAssets((previous) => previous.filter((asset) => asset.id !== id))} />;
+      case 'generator': return <CreatorStudio {...callbacks('generator')} {...creatorProjectProps} initialToolId="image" allowedToolIds={['image', 'video']} initialAsset={handoffAsset} workspaceLabel="AI Generator" />;
+      case 'scene-builder': return <CreatorStudio {...callbacks('scene-builder')} {...creatorProjectProps} initialToolId="storyboard" allowedToolIds={['storyboard']} initialAsset={handoffAsset} workspaceLabel="Scene Builder" />;
+      case 'music-video': return <CreatorStudio {...callbacks('music-video')} {...creatorProjectProps} initialToolId="storyboard" allowedToolIds={['storyboard']} initialAsset={handoffAsset} workspaceLabel="Music Video" />;
+      case 'publish': return <SocialPublishStudio initialAsset={handoffAsset} initialDraft={selenaAction?.parameters} youtubeWorkspace={<CreatorStudio {...callbacks('publish')} {...creatorProjectProps} initialToolId="publish" allowedToolIds={['publish']} workspaceLabel="YouTube Publish" />} />;
+      case 'projects': return <ProjectsStudio projects={projectSummaries} currentProject={currentProject} loading={projectsLoading} error={projectError} onCreate={createProject} onOpen={openProject} onRename={renameProject} onRefresh={() => refreshProjects(currentProject?.id)} />;
+      case 'assets': return <StudioAssets assets={assets} currentProject={currentProject} onOpen={openAsset} onDelete={deleteAsset} onUpload={uploadProjectAsset} uploading={assetUploading} />;
       case 'graphics':
       case 'graphic-studio': return <GraphicStudio {...legacyShared} initialAsset={handoffAsset} isHeaderVisible={isHeaderVisible} onToggleHeader={setIsHeaderVisible} />;
       case 'lipsync': return <LipSyncStudio {...legacyShared} initialAsset={handoffAsset} />;

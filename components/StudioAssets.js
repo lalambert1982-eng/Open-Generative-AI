@@ -1,6 +1,6 @@
 'use client';
 
-import { Film, Image as ImageIcon, Mic2, Play, Trash2 } from 'lucide-react';
+import { Film, Image as ImageIcon, Mic2, Play, Trash2, Upload } from 'lucide-react';
 
 function AssetPreview({ asset }) {
   if (asset.type === 'video') return <video src={asset.url} muted preload="metadata" className="h-full w-full object-cover" />;
@@ -8,13 +8,19 @@ function AssetPreview({ asset }) {
   return <img src={asset.url} alt="" className="h-full w-full object-cover" />;
 }
 
-export default function StudioAssets({ assets, onOpen, onDelete }) {
+export default function StudioAssets({ assets, currentProject, onOpen, onDelete, onUpload, uploading = false }) {
   return (
     <div className="h-full overflow-y-auto bg-[#050506] px-5 py-8 text-white sm:px-8">
       <div className="mx-auto max-w-6xl">
         <p className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-300/70">Assets</p>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight">Generate once. Reuse everywhere.</h1>
-        <p className="mt-3 max-w-2xl text-sm leading-6 text-white/35">This first pass retains generated URLs in this browser session and supports real handoff into Scene Builder and Lip Sync. Server-side project persistence remains future work.</p>
+        <div className="mt-3 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+          <p className="max-w-2xl text-sm leading-6 text-white/35">{currentProject ? <>Assets are retained in <strong className="text-white/55">{currentProject.name}</strong> and can move directly into Graphic Studio, Scene Builder, Lip Sync, and Publish.</> : 'Create or open a Project to retain Assets across browser sessions.'}</p>
+          <label className={`flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl border px-4 text-xs font-black ${currentProject && !uploading ? 'cursor-pointer border-cyan-300/20 bg-cyan-300/[0.07] text-cyan-100' : 'cursor-not-allowed border-white/[0.07] text-white/20'}`}>
+            <Upload size={14} /> {uploading ? 'Uploading…' : 'Upload Asset'}
+            <input type="file" className="hidden" disabled={!currentProject || uploading} accept="image/*,video/mp4,video/quicktime,video/webm,audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) onUpload?.(file); event.target.value = ''; }} />
+          </label>
+        </div>
 
         {assets.length === 0 ? (
           <div className="mt-10 rounded-3xl border border-dashed border-white/[0.1] bg-white/[0.02] px-8 py-20 text-center">

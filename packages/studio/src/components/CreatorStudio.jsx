@@ -5,6 +5,7 @@ import { upload as uploadBlob } from "@vercel/blob/client";
 import {
   Bot,
   Check,
+  ChevronRight,
   CircleAlert,
   Download,
   ExternalLink,
@@ -17,6 +18,7 @@ import {
   Mic2,
   Play,
   Send,
+  ShieldCheck,
   UserRound,
   WandSparkles,
 } from "lucide-react";
@@ -718,6 +720,27 @@ function hasRequiredInput(toolId, draft) {
   return Boolean(draft.prompt.trim());
 }
 
+function SelenaActionCard({ action, onOpen, onDismiss }) {
+  return (
+    <div className="mt-3 rounded-xl border border-violet-300/15 bg-violet-300/[0.045] p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-[0.16em] text-violet-200/60">
+            {action.requiresApproval && <ShieldCheck size={12} />} Prepared action
+          </div>
+          <p className="mt-1 text-xs font-bold text-white/80">{action.label}</p>
+          {action.rationale && <p className="mt-1 text-[10px] leading-4 text-white/35">{action.rationale}</p>}
+          {action.sideEffect && <p className="mt-2 text-[9px] leading-4 text-amber-100/55">{action.sideEffect}</p>}
+        </div>
+      </div>
+      <div className="mt-3 flex gap-2">
+        <button type="button" onClick={onDismiss} className="rounded-lg border border-white/[0.08] px-3 py-2 text-[9px] font-bold text-white/40">Cancel</button>
+        <button type="button" onClick={() => onOpen?.(action)} disabled={!action.available} className="flex items-center gap-1 rounded-lg bg-violet-200 px-3 py-2 text-[9px] font-black text-black disabled:cursor-not-allowed disabled:opacity-30">{action.available ? action.requiresApproval ? 'Review action' : 'Open workspace' : 'Unavailable'} <ChevronRight size={11} /></button>
+      </div>
+    </div>
+  );
+}
+
 export default function CreatorStudio({
   onGenerationStart,
   onGenerationEnd,
@@ -727,6 +750,13 @@ export default function CreatorStudio({
   allowedToolIds = null,
   initialPrompt = "",
   initialAsset = null,
+  initialAction = null,
+  project = null,
+  selectedAsset = null,
+  onSelenaAction,
+  onConversationChange,
+  onStoryboardChange,
+  onProjectNameChange,
   workspaceLabel = "Creator Studio",
 }) {
   const [session, setSession] = useState(null);
@@ -745,6 +775,9 @@ export default function CreatorStudio({
   const [youtubeUploadProgress, setYoutubeUploadProgress] = useState(0);
   const objectUrlsRef = useRef(new Set());
   const generationTokenRef = useRef(0);
+  const loadedConversationProjectRef = useRef(null);
+  const consumedActionRef = useRef(null);
+  const conversationSaveTimerRef = useRef(null);
 
   const visibleTools = useMemo(() => (
     Array.isArray(allowedToolIds) && allowedToolIds.length
@@ -791,6 +824,81 @@ export default function CreatorStudio({
       video: { ...previous.video, firstFrameUrl: initialAsset.url },
     }));
   }, [initialAsset]);
+
+  useEffect(() => {
+    const actionKey = initialAction?.id || '';
+    if (!actionKey || consumedActionRef.current === actionKey) return;
+    const parameters = initialAction.parameters || {};
+    if (initialAction.action === 'image.generate') {
+      consumedActionRef.current = actionKey;
+      setActiveToolId('image');
+      setDrafts((previous) => ({
+        ...previous,
+        image: {
+          ...previous.image,
+          prompt: parameters.prompt || previous.image.prompt,
+          aspectRatio: parameters.aspectRatio || previous.image.aspectRatio,
+        },
+      }));
+    } else if (['video.generate', 'video.animate'].includes(initialAction.action)) {
+      consumedActionRef.current = actionKey;
+      setActiveToolId('video');
+      setDrafts((previous) => ({
+        ...previous,
+        video: {
+          ...previous.video,
+          prompt: parameters.prompt || previous.video.prompt,
+          aspectRatio: parameters.aspectRatio || previous.video.aspectRatio,
+          duration: parameters.duration || previous.video.duration,
+          firstFrameUrl: initialAction.action === 'video.animate' && initialAsset?.type === 'image'
+            ? initialAsset.url
+            : previous.video.firstFrameUrl,
+        },
+      }));
+    }
+  }, [initialAction, initialAsset]);
+
+  useEffect(() => {
+    if (!project?.id || loadedConversationProjectRef.current === project.id) return;
+    loadedConversationProjectRef.current = project.id;
+    const messages = Array.isArray(project.conversation?.messages)
+      ? project.conversation.messages.map((message) => ({
+          ...message,
+          actions: Array.isArray(message.actions) ? message.actions : [],
+          suggestedActions: [],
+        }))
+      : [];
+    setAssistantHistory(messages);
+  }, [project?.id, project?.conversation?.messages]);
+
+  useEffect(() => {
+    if (!project?.id || typeof onConversationChange !== 'function') return undefined;
+    const messages = assistantHistory.slice(-50).map((message) => ({
+      id: message.id,
+      role: message.role,
+      text: message.text,
+      provider: message.provider || null,
+      actions: Array.isArray(message.suggestedActions) && message.suggestedActions.length > 0
+        ? message.suggestedActions.map((action) => action.action)
+        : (Array.isArray(message.actions) ? message.actions : []),
+      createdAt: message.createdAt || null,
+    }));
+    const stored = Array.isArray(project.conversation?.messages) ? project.conversation.messages : [];
+    const comparable = (items) => items.map((message) => ({
+      id: message.id,
+      role: message.role,
+      text: message.text,
+      provider: message.provider || null,
+      actions: Array.isArray(message.actions) ? message.actions : [],
+      createdAt: message.createdAt || null,
+    }));
+    if (JSON.stringify(comparable(messages)) === JSON.stringify(comparable(stored))) return undefined;
+    window.clearTimeout(conversationSaveTimerRef.current);
+    conversationSaveTimerRef.current = window.setTimeout(() => {
+      onConversationChange({ version: 1, messages });
+    }, 700);
+    return () => window.clearTimeout(conversationSaveTimerRef.current);
+  }, [assistantHistory, onConversationChange, project?.conversation?.messages, project?.id]);
 
   const request = useCallback(async (path, options = {}) => {
     const headers = new Headers(options.headers || {});
@@ -894,6 +1002,7 @@ export default function CreatorStudio({
 
   useEffect(() => () => {
     generationTokenRef.current += 1;
+    window.clearTimeout(conversationSaveTimerRef.current);
     objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     objectUrlsRef.current.clear();
   }, []);
@@ -1118,18 +1227,47 @@ export default function CreatorStudio({
     try {
       let output;
       if (toolId === "assistant") {
-        setAssistantHistory((previous) => [...previous, { id: window.crypto.randomUUID(), role: "user", text: draft.prompt }]);
-        const response = await request("assistant", { method: "POST", body: draft });
+        const timestamp = new Date().toISOString();
+        setAssistantHistory((previous) => [...previous, { id: window.crypto.randomUUID(), role: "user", text: draft.prompt, createdAt: timestamp }]);
+        const response = await request("assistant", {
+          method: "POST",
+          body: {
+            ...draft,
+            workspace: workspaceLabel,
+            projectId: project?.id || null,
+            selectedAssetId: selectedAsset?.id || initialAsset?.id || null,
+          },
+        });
         if (!response.ok) throw new Error(await responseError(response));
         const data = await response.json();
-        output = { type: "text", text: data.text, model: data.model, provider: data.provider };
-        setAssistantHistory((previous) => [...previous, { id: window.crypto.randomUUID(), role: "assistant", text: data.text, provider: data.provider }]);
+        output = {
+          type: "text",
+          text: data.message || data.text,
+          model: data.model,
+          provider: data.provider,
+          plan: data.plan || [],
+          suggestedActions: data.suggestedActions || [],
+          requiresApproval: data.requiresApproval === true,
+          estimatedSideEffects: data.estimatedSideEffects || [],
+        };
+        setAssistantHistory((previous) => [...previous, {
+          id: window.crypto.randomUUID(),
+          role: "assistant",
+          text: output.text,
+          provider: data.provider,
+          plan: output.plan,
+          suggestedActions: output.suggestedActions,
+          requiresApproval: output.requiresApproval,
+          estimatedSideEffects: output.estimatedSideEffects,
+          createdAt: new Date().toISOString(),
+        }]);
       } else if (toolId === "image" || toolId === "video") {
         output = await submitProjectMedia({ kind: toolId, ...draft }, token, { trackOutput: true });
       } else if (toolId === "voice") {
         const response = await request("speech", { method: "POST", body: draft });
         if (!response.ok) throw new Error(await responseError(response));
-        output = { type: "audio", url: rememberObjectUrl(await response.blob()) };
+        const blob = await response.blob();
+        output = { type: "audio", url: rememberObjectUrl(blob), blob, mimeType: blob.type || "audio/mpeg" };
       } else if (toolId === "avatar") {
         const response = await request("heygen", { method: "POST", body: draft });
         if (!response.ok) throw new Error(await responseError(response));
@@ -1219,6 +1357,10 @@ export default function CreatorStudio({
         provider: providerId,
         type: output.type || toolId,
         model: output.model || null,
+        requestId: output.id || output.jobId || null,
+        keyMode: output.keyMode || null,
+        blob: output.blob || null,
+        mimeType: output.mimeType || null,
         title: `${activeTool.label} output`,
       });
     } catch (generationError) {
@@ -1232,6 +1374,14 @@ export default function CreatorStudio({
       }
       onGenerationEnd?.();
     }
+  };
+
+  const dismissAssistantAction = (messageId, actionId) => {
+    setAssistantHistory((previous) => previous.map((message) => (
+      message.id === messageId
+        ? { ...message, suggestedActions: (message.suggestedActions || []).filter((action) => action.id !== actionId) }
+        : message
+    )));
   };
 
   const activeReady = activeProvider?.configured === true && (
@@ -1299,6 +1449,10 @@ export default function CreatorStudio({
             error={error}
             onGenerateMedia={runProjectMedia}
             initialAsset={initialAsset}
+            initialAction={initialAction}
+            project={project}
+            onStoryboardChange={onStoryboardChange}
+            onProjectNameChange={onProjectNameChange}
           />
         </main>
 
@@ -1329,6 +1483,19 @@ export default function CreatorStudio({
                     )}>
                       <p className="mb-1 text-[9px] font-black uppercase tracking-[0.18em] text-white/25">{message.role === "user" ? "You" : "Selena"}</p>
                       <p className="whitespace-pre-wrap">{message.text}</p>
+                      {message.role === "assistant" && Array.isArray(message.plan) && message.plan.length > 0 && (
+                        <ol className="mt-3 space-y-1 border-t border-white/[0.06] pt-3 text-xs text-white/48">
+                          {message.plan.map((step, index) => <li key={`${message.id}-step-${index}`} className="flex gap-2"><span className="text-cyan-200/45">{index + 1}.</span><span>{step}</span></li>)}
+                        </ol>
+                      )}
+                      {message.role === "assistant" && Array.isArray(message.suggestedActions) && message.suggestedActions.map((action) => (
+                        <SelenaActionCard
+                          key={action.id}
+                          action={action}
+                          onOpen={onSelenaAction}
+                          onDismiss={() => dismissAssistantAction(message.id, action.id)}
+                        />
+                      ))}
                     </article>
                   ))}
                   {working && <div className="mr-8 flex items-center gap-2 rounded-2xl border border-white/[0.07] bg-white/[0.025] px-4 py-3 text-xs text-white/35"><LoaderCircle size={14} className="animate-spin" /> Selena is reasoning…</div>}

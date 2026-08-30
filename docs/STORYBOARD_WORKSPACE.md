@@ -15,13 +15,13 @@ This document defines the first project-based Creator Studio UX pass. It records
 
 | Capability | Built | Configured | Tested | Production ready |
 |---|---|---|---|---|
-| Project/scene workspace | Yes — integrated feature branch | No new configuration required | Automated scene/request and shell-handoff tests only | No — not deployed |
+| Project/scene workspace | Yes — integrated feature branch with durable Project manifests | Requires `BLOB_READ_WRITE_TOKEN` in the target environment | Automated scene/request, ownership, persistence, and shell-handoff tests only | No — completion candidate is not deployed |
 | Generate Still bridge | Yes — existing `POST /api/creator/image` | Inherits MuAPI status | Request-shape test only in this patch | No — Storyboard E2E pending |
 | Text → Video bridge | Yes — existing `POST /api/creator/video` | Inherits MuAPI status | Request shape and server T2V-selection tests | No — Storyboard E2E pending |
 | Image → Video bridge | Yes — existing `POST /api/creator/video` with `firstFrameUrl` | Inherits MuAPI status | First-frame request and server I2V-selection tests | No — Storyboard E2E pending |
 | Scene transitions | UI metadata only | Not applicable | Scene-state test | No compositor; not rendered |
 | Final export | Planned/disabled | Not applicable | Not tested | No |
-| Graphic Studio | Yes — reuses CreativeCanvas, ImageStudio/DrawModal, and LayersStudio | Core asset editing requires no key; CreativeCanvas AI retains isolated legacy BYOK pending migration | Compile/source integration tests only | No |
+| Graphic Studio | Yes — reuses CreativeCanvas, ImageStudio/DrawModal, and LayersStudio | Embedded CreativeCanvas uses the Creator-authenticated server adapter; isolated legacy Image/Edit modes still retain BYOK compatibility | Proxy/security and source integration tests only | No — live owner smoke pending |
 
 No deployment, Production environment edit, paid-generation activation, or provider request is part of this patch.
 
@@ -39,7 +39,7 @@ The existing gateway, MuAPI provider, GitHub owner authentication, same-origin c
 
 ## Scene model and behavior
 
-Phase 1 keeps scenes in local React state. A scene contains an ID, title, prompt, image/video URLs, duration, aspect ratio, transition, status, and returned model metadata. Persistence, collaboration, version history, and server-side project storage are intentionally deferred.
+The editor keeps active scene changes in local React state and saves the Storyboard into the selected owner-authenticated Project manifest. A scene contains an ID, title, prompt, image/video URLs, duration, aspect ratio, transition, status, and returned model metadata. Multi-user collaboration and document version history remain deferred.
 
 The workspace supports:
 
@@ -53,7 +53,7 @@ The workspace supports:
 - copy the previous scene image into the current scene without generating;
 - show per-scene working and error states.
 
-The local asset panel does not reuse `DrawModal.jsx`'s browser-key upload/generation path. No secure Creator Studio upload route currently provides a provider-reachable first-frame URL, so Upload is explicitly disabled/planned rather than creating a second backend.
+The local Storyboard panel does not reuse `DrawModal.jsx`'s browser-key upload/generation path. Secure Project uploads are available through Assets and can be handed into Scene Builder; a second inline upload implementation is intentionally not duplicated.
 
 The shell-level Asset library can pass an already generated HTTPS image directly into Graphic Studio, Scene Builder, and Lip Sync. Music Video is a Storyboard-backed entry point and does not imply a finished compositor or audio mix.
 
@@ -77,22 +77,25 @@ Animate Image
 
 Runway remains a preserved, deferred server adapter. A future Auto/Kling/Seedance/Runway override must extend the existing gateway safely; it must not add browser credentials or a second provider dispatch implementation.
 
-## Future Design mode
+## Graphic Studio and future embedded Design mode
 
-Design mode should reuse interaction concepts from `DrawModal.jsx`, including pointer selection, pencil, eraser, rectangles, arrows, text, inserted images, canvas objects, undo, and redo. It should not reuse the legacy direct `muapi.js` browser-key generation call.
+Graphic Studio now consolidates CreativeCanvas, `ImageStudio`, `DrawModal`, and Layers. The embedded CreativeCanvas path no longer writes a provider token into browser storage and instead uses the Creator-authenticated server proxy. The older standalone Generate/Edit compatibility modes remain isolated BYOK code and are documented for incremental migration.
+
+A future Storyboard-embedded Design mode should reuse the same canvas concepts—pointer selection, pencil, eraser, rectangles, arrows, text, inserted images, canvas objects, undo, and redo—without introducing another editor or direct browser provider call.
 
 A safe implementation sequence is:
 
-1. Extract provider-independent canvas document/history operations into pure modules.
-2. Add a `Storyboard | Design` mode switch with Design backed by that document model.
-3. Reuse generated Storyboard assets as inserted Design objects.
-4. Route every Design AI generation/edit through authenticated Creator Studio server routes.
-5. Add a secure asset-ingestion boundary only after storage, validation, ownership, retention, and provider-reachable URL policy are defined.
-6. Add persistence and export only after the document format is versioned and tested.
+1. Audit and reuse CreativeCanvas document/history operations rather than extracting a competing canvas.
+2. Add a `Storyboard | Design` entry switch backed by Graphic Studio.
+3. Reuse Project Assets as inserted Design objects.
+4. Migrate the remaining isolated BYOK generation/edit modes behind Creator routes.
+5. Version the graphic document format before adding durable canvas-session persistence.
 
-## Future compositor/timeline
+## Timeline manifest and future compositor
 
-The current storyboard orders scenes and records transition intent; it does not render a final program. A future compositor should use a versioned project manifest with references to immutable owned assets and then process:
+The completion candidate creates a versioned `creator.timeline.v1` manifest from the Storyboard. It represents ordered clips, timing, transition metadata, voice/music/caption/overlay tracks, aspect ratio, resolution, and render status. Transitions are explicitly marked `rendered: false`; it does not render a final program.
+
+A future compositor should consume owned source references from that manifest and then process:
 
 ```text
 ordered scene clips

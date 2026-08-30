@@ -38,8 +38,26 @@ function assetType(asset) {
   return asset?.type === "image" ? "image" : asset?.type === "video" ? "video" : "";
 }
 
+function safePreviewUrl(value) {
+  if (typeof value !== "string" || value.length > 4096) return "";
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase();
+    const allowed = hostname === "cdn.muapi.ai" ||
+      hostname.endsWith(".muapi.ai") ||
+      hostname.endsWith(".vercel-storage.com") ||
+      hostname.endsWith(".heygen.ai") ||
+      hostname.endsWith(".heygen.com");
+    if (url.protocol !== "https:" || url.username || url.password || url.hash || !allowed) return "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
 function Preview({ mediaUrl, mediaType }) {
-  if (!mediaUrl) {
+  const trustedMediaUrl = safePreviewUrl(mediaUrl);
+  if (!trustedMediaUrl) {
     return (
       <div className="flex aspect-video items-center justify-center rounded-2xl border border-dashed border-white/[0.1] bg-black/30 text-center">
         <div><Send className="mx-auto text-white/15" size={30} /><p className="mt-3 text-xs text-white/25">Choose a Creator Asset or enter its public URL.</p></div>
@@ -47,9 +65,9 @@ function Preview({ mediaUrl, mediaType }) {
     );
   }
   if (mediaType === "video") {
-    return <video src={mediaUrl} controls preload="metadata" className="aspect-video w-full rounded-2xl bg-black object-contain" />;
+    return <video src={trustedMediaUrl} controls preload="metadata" className="aspect-video w-full rounded-2xl bg-black object-contain" />;
   }
-  return <img src={mediaUrl} alt="Selected social asset" className="aspect-video w-full rounded-2xl bg-black object-contain" />;
+  return <img src={trustedMediaUrl} alt="Selected social asset" className="aspect-video w-full rounded-2xl bg-black object-contain" />;
 }
 
 function StatusBadge({ status }) {
@@ -61,7 +79,7 @@ function StatusBadge({ status }) {
   );
 }
 
-export default function SocialPublishStudio({ initialAsset = null, youtubeWorkspace = null }) {
+export default function SocialPublishStudio({ initialAsset = null, initialDraft = null, youtubeWorkspace = null }) {
   const [mode, setMode] = useState("social");
   const [status, setStatus] = useState(null);
   const [accounts, setAccounts] = useState([]);
@@ -100,6 +118,12 @@ export default function SocialPublishStudio({ initialAsset = null, youtubeWorksp
     setMediaType(type);
     if (type === "image") setPlatform("instagram");
   }, [initialAsset]);
+
+  useEffect(() => {
+    if (!initialDraft || typeof initialDraft !== "object") return;
+    if (["instagram", "tiktok"].includes(initialDraft.platform)) setPlatform(initialDraft.platform);
+    if (typeof initialDraft.caption === "string") setCaption(initialDraft.caption.slice(0, initialDraft.platform === "tiktok" ? 150 : 2200));
+  }, [initialDraft]);
 
   async function loadSocial() {
     setLoading(true);
@@ -180,7 +204,7 @@ export default function SocialPublishStudio({ initialAsset = null, youtubeWorksp
   function beginReview() {
     setError("");
     if (!selectedAccount) return setError(`Connect and select a ${platform === "instagram" ? "Instagram" : "TikTok"} account first.`);
-    if (!mediaUrl.startsWith("https://")) return setError("Choose a public HTTPS Creator Asset first.");
+    if (!safePreviewUrl(mediaUrl)) return setError("Choose a permitted public HTTPS Creator Asset first.");
     if (platform === "tiktok" && mediaType !== "video") return setError("TikTok publishing currently requires a video Asset.");
     setApproved(false);
     setReviewing(true);
