@@ -131,6 +131,19 @@ export function creatorProjectConfiguration(env = process.env) {
     };
 }
 
+export function creatorAssetStorageConfiguration(env = process.env) {
+    const blobToken = normalized(env.CREATOR_ASSET_BLOB_READ_WRITE_TOKEN);
+    const missing = [];
+    if (blobToken.length < 20 || blobToken.length > 4096) {
+        missing.push('CREATOR_ASSET_BLOB_READ_WRITE_TOKEN');
+    }
+    return {
+        configured: missing.length === 0,
+        missing,
+        blobToken,
+    };
+}
+
 function requireConfiguration(env) {
     const configuration = creatorProjectConfiguration(env);
     if (!configuration.configured) {
@@ -501,6 +514,7 @@ export async function addCreatorAsset(user, projectId, input = {}, {
 export async function deleteCreatorAsset(user, projectId, assetId, input = {}, {
     env = process.env,
     blobStore = defaultBlobStore,
+    assetBlobStore = defaultBlobStore,
     now = Date.now(),
 } = {}) {
     if (input.approved !== true) throw new CreatorProjectError('approval_required', 'Asset deletion requires explicit approval.', 403);
@@ -518,7 +532,10 @@ export async function deleteCreatorAsset(user, projectId, assetId, input = {}, {
     }, now);
     await writeProject(next, { configuration, blobStore, allowOverwrite: true });
     if (asset.storagePath && asset.storagePath.startsWith(creatorAssetUploadPrefix(id))) {
-        await blobStore.del(asset.storagePath, blobOptions(configuration)).catch(() => {});
+        const assetConfiguration = creatorAssetStorageConfiguration(env);
+        if (assetConfiguration.configured) {
+            await assetBlobStore.del(asset.storagePath, { token: assetConfiguration.blobToken }).catch(() => {});
+        }
     }
     return { project: projectForClient(next), deletedAssetId: targetAssetId };
 }

@@ -55,6 +55,9 @@ test('Projects and Assets use the authenticated durable Project API with owner-s
     assert.match(shell, /onNavigate=\{navigate\}/);
     assert.match(projects, /Recent Projects/);
     assert.match(assets, /Upload Asset/);
+    assert.match(assets, /role="alert"/);
+    assert.match(assets, /Asset upload failed/);
+    assert.match(shell, /uploading=\{assetUploading\} error=\{projectError\}/);
     assert.match(projectRoute, /authorizeCreatorRequest/);
     assert.match(projectRoute, /getCreatorProject\(user, payload\.projectId/);
 });

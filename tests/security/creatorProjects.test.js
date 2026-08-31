@@ -18,6 +18,7 @@ import { resetRateLimitStore } from '../../src/lib/rateLimit.js';
 
 const env = {
     BLOB_READ_WRITE_TOKEN: 'vercel-blob-test-token-that-is-long-enough',
+    CREATOR_ASSET_BLOB_READ_WRITE_TOKEN: 'creator-public-blob-test-token-that-is-long-enough',
     CREATOR_SESSION_SECRET: 'creator-project-test-secret-that-is-longer-than-thirty-two-characters',
     CREATOR_GITHUB_ALLOWED_USER_IDS: '12345678,87654321',
     CREATOR_GITHUB_ALLOWED_LOGINS: 'lalambert1982-eng,other-owner',
@@ -105,7 +106,11 @@ test('Asset ownership, safe URLs, and deletion approval are enforced server-side
         (error) => error instanceof CreatorProjectError && error.code === 'project_not_found',
     );
 
-    const deleted = await deleteCreatorAsset(owner, projectId, assetId, { approved: true }, { env, blobStore });
+    const deleted = await deleteCreatorAsset(owner, projectId, assetId, { approved: true }, {
+        env,
+        blobStore,
+        assetBlobStore: blobStore,
+    });
     assert.equal(deleted.deletedAssetId, assetId);
     assert.equal(deleted.project.assets.length, 0);
     assert.equal(records.has(storagePath), false);
@@ -183,4 +188,71 @@ test('Project routes require owner authentication and same-origin mutation', asy
     assert.equal(serialized.includes(env.BLOB_READ_WRITE_TOKEN), false);
     assert.equal(serialized.includes(env.CREATOR_SESSION_SECRET), false);
     assert.equal(serialized.includes('ownerSubject'), false);
+});
+
+test('Project Asset uploads use only the separate public Blob credential', async () => {
+    resetRateLimitStore();
+    const records = new Map();
+    const blobStore = creatorProjectStoreForTests(records);
+    await createCreatorProject(owner, { name: 'Upload Project' }, {
+        env,
+        blobStore,
+        idGenerator: () => projectId,
+    });
+    const cookieName = creatorCookieSettings(env).sessionName;
+    const session = createCreatorSession(owner, { env });
+    const pathname = `${creatorAssetUploadPrefix(projectId)}opening.png`;
+    const request = new Request('https://local.test/api/creator/projects/blob-upload', {
+        method: 'POST',
+        headers: {
+            'content-type': 'application/json',
+            origin: 'https://local.test',
+            'sec-fetch-site': 'same-origin',
+            cookie: `${cookieName}=${session}`,
+        },
+        body: JSON.stringify({ type: 'blob.generate-client-token' }),
+    });
+    let authorizedToken = '';
+    const response = await handleCreatorProjectRoute(request, {
+        path: ['blob-upload'],
+        env,
+        blobStore,
+        handleUploadImpl: async (options) => {
+            authorizedToken = options.token;
+            const constraints = await options.onBeforeGenerateToken(pathname, JSON.stringify({ projectId }));
+            assert.equal(constraints.allowedContentTypes.includes('image/png'), true);
+            assert.equal(constraints.addRandomSuffix, true);
+            return { type: 'blob.generate-client-token', clientToken: 'opaque-short-lived-token' };
+        },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(authorizedToken, env.CREATOR_ASSET_BLOB_READ_WRITE_TOKEN);
+    assert.notEqual(authorizedToken, env.BLOB_READ_WRITE_TOKEN);
+    const serialized = JSON.stringify(await response.json());
+    assert.equal(serialized.includes(env.CREATOR_ASSET_BLOB_READ_WRITE_TOKEN), false);
+    assert.equal(serialized.includes(env.BLOB_READ_WRITE_TOKEN), false);
+});
+
+test('Project Asset uploads fail visibly closed when the public store is not configured', async () => {
+    resetRateLimitStore();
+    const missingAssetStoreEnv = { ...env, CREATOR_ASSET_BLOB_READ_WRITE_TOKEN: '' };
+    const cookieName = creatorCookieSettings(missingAssetStoreEnv).sessionName;
+    const session = createCreatorSession(owner, { env: missingAssetStoreEnv });
+    const response = await handleCreatorProjectRoute(new Request('https://local.test/api/creator/projects/blob-upload', {
+        method: 'POST',
+        headers: {
+            'content-type': 'application/json',
+            origin: 'https://local.test',
+            'sec-fetch-site': 'same-origin',
+            cookie: `${cookieName}=${session}`,
+        },
+        body: JSON.stringify({ type: 'blob.generate-client-token' }),
+    }), {
+        path: ['blob-upload'],
+        env: missingAssetStoreEnv,
+        blobStore: creatorProjectStoreForTests(),
+        handleUploadImpl: async () => { throw new Error('must_not_run'); },
+    });
+    assert.equal(response.status, 503);
+    assert.deepEqual((await response.json()).missing, ['CREATOR_ASSET_BLOB_READ_WRITE_TOKEN']);
 });

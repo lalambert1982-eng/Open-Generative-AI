@@ -495,7 +495,7 @@ export default function StandaloneShell() {
       case 'music-video': return <CreatorStudio {...callbacks('music-video')} {...creatorProjectProps} initialToolId="storyboard" allowedToolIds={['storyboard']} initialAsset={handoffAsset} workspaceLabel="Music Video" />;
       case 'publish': return <SocialPublishStudio initialAsset={handoffAsset} initialDraft={selenaAction?.parameters} youtubeWorkspace={<CreatorStudio {...callbacks('publish')} {...creatorProjectProps} initialToolId="publish" allowedToolIds={['publish']} workspaceLabel="YouTube Publish" />} />;
       case 'projects': return <ProjectsStudio projects={projectSummaries} currentProject={currentProject} loading={projectsLoading} error={projectError} onCreate={createProject} onOpen={openProject} onRename={renameProject} onRefresh={() => refreshProjects(currentProject?.id)} onNavigate={navigate} />;
-      case 'assets': return <StudioAssets assets={assets} currentProject={currentProject} onOpen={openAsset} onDelete={deleteAsset} onUpload={uploadProjectAsset} uploading={assetUploading} />;
+      case 'assets': return <StudioAssets assets={assets} currentProject={currentProject} onOpen={openAsset} onDelete={deleteAsset} onUpload={uploadProjectAsset} uploading={assetUploading} error={projectError} />;
       case 'graphics':
       case 'graphic-studio': return <GraphicStudio {...legacyShared} initialAsset={handoffAsset} isHeaderVisible={isHeaderVisible} onToggleHeader={setIsHeaderVisible} />;
       case 'lipsync': return <LipSyncStudio {...legacyShared} initialAsset={handoffAsset} />;

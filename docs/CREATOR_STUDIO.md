@@ -30,17 +30,20 @@ All provider credentials are read only by the Next.js server. They are never sen
 
 ## Durable Projects and Assets
 
-Creator Projects reuse the private Vercel Blob infrastructure already required by YouTube. Configure `BLOB_READ_WRITE_TOKEN` in the target environment. `CREATOR_SESSION_SECRET` is also used to derive a non-public owner namespace from the authenticated GitHub user ID.
+Creator Projects reuse the private Vercel Blob infrastructure already required by YouTube. Reusable Creator media Assets use a separate public Blob store because their URLs must be directly usable by previews and downstream media providers. Configure both server-only tokens in the target environment. `CREATOR_SESSION_SECRET` is also used to derive a non-public owner namespace from the authenticated GitHub user ID.
 
 ```dotenv
 BLOB_READ_WRITE_TOKEN=<private Vercel Blob token; server-only>
+CREATOR_ASSET_BLOB_READ_WRITE_TOKEN=<public Creator Asset Blob token; server-only>
 CREATOR_ASSET_UPLOAD_MAX_BYTES=262144000
 CREATOR_ASSET_ALLOWED_HOSTS=cdn.muapi.ai,*.muapi.ai,*.vercel-storage.com,*.heygen.ai,*.heygen.com
 ```
 
 Project manifests are private, revisioned JSON records. They retain Project metadata, bounded Selena conversation history, Asset metadata, Storyboard state, and a versioned timeline manifest. Workflow-reference and publish-draft fields exist in the manifest, but their full UI persistence is not complete. The browser supplies a Project ID; the server resolves it only inside the authenticated owner's derived namespace.
 
-Owner uploads use `/api/creator/projects/blob-upload`. The server validates Project ownership, the exact upload prefix, allowed MIME types, and maximum size before issuing a short-lived Vercel Blob client token. Generated remote output URLs and provider metadata are validated and normalized before registration. Asset deletion requires `{ approved: true }` and removes only the exact owned Blob path recorded in the Project.
+Uploaded Creator media is public to anyone who possesses its randomized Blob URL. The Project manifest and ownership metadata remain private and owner-authenticated. Do not upload sensitive media to the Creator Asset library. A future private signed-URL/media-proxy design is required before sensitive reusable Assets can be supported safely.
+
+Owner uploads use `/api/creator/projects/blob-upload`. The server validates Project ownership, the exact upload prefix, allowed MIME types, and maximum size before issuing a short-lived token for the separate public Creator Asset store. Generated remote output URLs and provider metadata are validated and normalized before registration. Asset deletion requires `{ approved: true }` and removes only the exact owned Blob path recorded in the Project using the public Asset-store credential.
 
 The existing session-scoped Asset cache remains for backward compatibility. It is not the durable source of truth. Create or open a Project before generating or uploading media that must survive browser sessions.
 

@@ -6,6 +6,7 @@ import {
     CreatorProjectError,
     addCreatorAsset,
     createCreatorProject,
+    creatorAssetStorageConfiguration,
     creatorAssetUploadPrefix,
     creatorProjectConfiguration,
     deleteCreatorAsset,
@@ -92,6 +93,13 @@ async function authorizeAssetUpload(request, user, {
             missing: configuration.missing,
         }, 503);
     }
+    const assetConfiguration = creatorAssetStorageConfiguration(env);
+    if (!assetConfiguration.configured) {
+        return creatorJson({
+            error: 'Public Creator Asset storage is not configured.',
+            missing: assetConfiguration.missing,
+        }, 503);
+    }
     let body;
     try {
         body = await request.json();
@@ -104,7 +112,7 @@ async function authorizeAssetUpload(request, user, {
 
     try {
         const result = await handleUploadImpl({
-            token: configuration.blobToken,
+            token: assetConfiguration.blobToken,
             request,
             body,
             onBeforeGenerateToken: async (pathname, clientPayload) => {

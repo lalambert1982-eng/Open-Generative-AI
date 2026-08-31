@@ -8,7 +8,7 @@ function AssetPreview({ asset }) {
   return <img src={asset.url} alt="" className="h-full w-full object-cover" />;
 }
 
-export default function StudioAssets({ assets, currentProject, onOpen, onDelete, onUpload, uploading = false }) {
+export default function StudioAssets({ assets, currentProject, onOpen, onDelete, onUpload, uploading = false, error = '' }) {
   return (
     <div className="h-full overflow-y-auto bg-[#050506] px-5 py-8 text-white sm:px-8">
       <div className="mx-auto max-w-6xl">
@@ -21,6 +21,13 @@ export default function StudioAssets({ assets, currentProject, onOpen, onDelete,
             <input type="file" className="hidden" disabled={!currentProject || uploading} accept="image/*,video/mp4,video/quicktime,video/webm,audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) onUpload?.(file); event.target.value = ''; }} />
           </label>
         </div>
+
+        {error && (
+          <div role="alert" className="mt-5 rounded-2xl border border-red-300/20 bg-red-300/[0.06] px-4 py-3 text-sm text-red-100">
+            <p className="font-semibold">Asset upload failed</p>
+            <p className="mt-1 text-xs leading-5 text-red-100/70">{error}</p>
+          </div>
+        )}
 
         {assets.length === 0 ? (
           <div className="mt-10 rounded-3xl border border-dashed border-white/[0.1] bg-white/[0.02] px-8 py-20 text-center">
