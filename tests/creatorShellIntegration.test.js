@@ -44,6 +44,9 @@ test('Projects and Assets use the authenticated durable Project API with owner-s
     assert.match(shell, /saveProjectConversation/);
     assert.match(shell, /recordAsset/);
     assert.match(projects, /New Project/);
+    assert.match(projects, /aria-label=\{editor\.mode === 'create' \? 'Create Project' : 'Rename Project'\}/);
+    assert.match(projects, /onSubmit=\{submitEditor\}/);
+    assert.doesNotMatch(projects, /window\.prompt/);
     assert.match(projects, /Recent Projects/);
     assert.match(assets, /Upload Asset/);
     assert.match(projectRoute, /authorizeCreatorRequest/);

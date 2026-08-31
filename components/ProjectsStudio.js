@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { FolderOpen, LoaderCircle, Pencil, Plus, RefreshCw } from 'lucide-react';
 
 export default function ProjectsStudio({
@@ -12,13 +13,33 @@ export default function ProjectsStudio({
   onRename,
   onRefresh,
 }) {
-  const createProject = () => {
-    const name = window.prompt('Project name', 'Untitled Project');
-    if (name?.trim()) onCreate?.(name.trim());
+  const [editor, setEditor] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const busy = loading || submitting;
+
+  const openCreateProject = () => {
+    setEditor({ mode: 'create', name: 'Untitled Project' });
   };
-  const renameProject = (project) => {
-    const name = window.prompt('Rename Project', project.name);
-    if (name?.trim() && name.trim() !== project.name) onRename?.(project.id, name.trim());
+  const openRenameProject = (project) => {
+    setEditor({ mode: 'rename', id: project.id, name: project.name, originalName: project.name });
+  };
+  const submitEditor = async (event) => {
+    event.preventDefault();
+    const name = editor?.name?.trim();
+    if (!name || busy) return;
+    if (editor.mode === 'rename' && name === editor.originalName) {
+      setEditor(null);
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const result = editor.mode === 'create'
+        ? await onCreate?.(name)
+        : await onRename?.(editor.id, name);
+      if (result) setEditor(null);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -31,10 +52,34 @@ export default function ProjectsStudio({
             <p className="mt-3 max-w-2xl text-sm leading-6 text-white/35">Project manifests, Storyboards, Selena conversation context, Assets, and timeline metadata are owner-scoped in private Vercel Blob storage.</p>
           </div>
           <div className="flex gap-2">
-            <button type="button" onClick={onRefresh} disabled={loading} aria-label="Refresh Projects" className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/[0.09] text-white/40 hover:text-white disabled:opacity-30"><RefreshCw size={15} className={loading ? 'animate-spin' : ''} /></button>
-            <button type="button" onClick={createProject} disabled={loading} className="flex h-11 items-center gap-2 rounded-xl bg-cyan-300 px-4 text-xs font-black text-black disabled:opacity-30"><Plus size={15} /> New Project</button>
+            <button type="button" onClick={onRefresh} disabled={busy} aria-label="Refresh Projects" className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/[0.09] text-white/40 hover:text-white disabled:opacity-30"><RefreshCw size={15} className={busy ? 'animate-spin' : ''} /></button>
+            <button type="button" onClick={openCreateProject} disabled={busy} className="flex h-11 items-center gap-2 rounded-xl bg-cyan-300 px-4 text-xs font-black text-black disabled:opacity-30"><Plus size={15} /> New Project</button>
           </div>
         </header>
+
+        {editor && (
+          <form onSubmit={submitEditor} aria-label={editor.mode === 'create' ? 'Create Project' : 'Rename Project'} className="mt-6 rounded-2xl border border-cyan-300/20 bg-cyan-300/[0.05] p-4 sm:flex sm:items-end sm:gap-3">
+            <div className="min-w-0 flex-1">
+              <label htmlFor="project-editor-name" className="block text-[10px] font-black uppercase tracking-[0.16em] text-cyan-100/60">{editor.mode === 'create' ? 'Project name' : `Rename ${editor.originalName}`}</label>
+              <input
+                id="project-editor-name"
+                type="text"
+                value={editor.name}
+                onChange={(event) => setEditor((current) => ({ ...current, name: event.target.value }))}
+                maxLength={100}
+                autoFocus
+                disabled={busy}
+                className="mt-2 h-11 w-full rounded-xl border border-white/[0.1] bg-black/35 px-4 text-sm text-white outline-none transition focus:border-cyan-300/50 disabled:opacity-40"
+              />
+            </div>
+            <div className="mt-3 flex gap-2 sm:mt-0">
+              <button type="button" onClick={() => setEditor(null)} disabled={busy} className="h-11 rounded-xl border border-white/[0.1] px-4 text-xs font-bold text-white/55 hover:text-white disabled:opacity-30">Cancel</button>
+              <button type="submit" disabled={busy || !editor.name.trim()} className="flex h-11 min-w-32 items-center justify-center rounded-xl bg-cyan-300 px-4 text-xs font-black text-black disabled:opacity-30">
+                {submitting ? <LoaderCircle size={15} className="animate-spin" /> : editor.mode === 'create' ? 'Create Project' : 'Save Name'}
+              </button>
+            </div>
+          </form>
+        )}
 
         {error && <div role="alert" className="mt-6 rounded-2xl border border-amber-300/20 bg-amber-300/[0.07] px-4 py-3 text-sm text-amber-100">{error}</div>}
         {currentProject && <div className="mt-6 rounded-2xl border border-cyan-300/15 bg-cyan-300/[0.05] px-4 py-3 text-xs text-cyan-100/70"><strong>Current Project:</strong> {currentProject.name} · {currentProject.assets?.length || 0} Assets · {currentProject.storyboard?.scenes?.length || 0} Scenes</div>}
@@ -46,7 +91,7 @@ export default function ProjectsStudio({
             <FolderOpen size={30} className="mx-auto text-white/20" />
             <h2 className="mt-4 text-sm font-semibold text-white/65">Create your first Project</h2>
             <p className="mt-2 text-xs text-white/25">A Project keeps Assets, Storyboard scenes, Selena context, and timeline metadata together across browser sessions.</p>
-            <button type="button" onClick={createProject} className="mt-6 rounded-xl bg-white px-4 py-3 text-xs font-black text-black">New Project</button>
+            <button type="button" onClick={openCreateProject} disabled={busy} className="mt-6 rounded-xl bg-white px-4 py-3 text-xs font-black text-black disabled:opacity-30">New Project</button>
           </div>
         ) : (
           <section className="mt-8">
@@ -63,7 +108,7 @@ export default function ProjectsStudio({
                       <p className="mt-2 text-[10px] uppercase tracking-wider text-white/25">{project.assetCount} Assets · {project.sceneCount} Scenes</p>
                       <p className="mt-3 text-[10px] text-white/20">Updated {new Date(project.updatedAt).toLocaleString()}</p>
                     </button>
-                    <button type="button" onClick={() => renameProject(project)} aria-label={`Rename ${project.name}`} className="text-white/25 hover:text-white"><Pencil size={14} /></button>
+                    <button type="button" onClick={() => openRenameProject(project)} aria-label={`Rename ${project.name}`} className="text-white/25 hover:text-white"><Pencil size={14} /></button>
                   </div>
                   <button type="button" onClick={() => onOpen?.(project.id)} className={`mt-5 w-full rounded-xl px-4 py-2.5 text-[10px] font-black ${active ? 'bg-cyan-300 text-black' : 'border border-white/[0.09] text-white/55 hover:text-white'}`}>{active ? 'Current Project' : 'Open Project'}</button>
                 </article>
