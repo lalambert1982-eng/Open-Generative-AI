@@ -24,7 +24,7 @@ The shell now organizes working destinations as:
 - **Tools:** secure Image, Video, Voice, and Avatar plus preserved legacy Music, Advanced Video, Lip Sync, Motion Graphics, Transform, and Smart Clip.
 - **Apps:** AI Generator, AI Influencer, Graphic Studio, Scene Builder, Music Video, Marketing Studio, and Edit Studio.
 - **Workflows:** the existing MuAPI workflow list, playground, and builder.
-- **Projects:** owner-authenticated durable manifests with recent/open/rename flows.
+- **Projects:** owner-authenticated durable manifests with recent/open/rename flows plus a Project workspace that launches Selena, generation, Storyboard, Graphic Studio, Assets, and Publish with the selected Project retained as context.
 - **Assets:** Project-owned generated media/uploads with Graphic Studio, Scene Builder, Lip Sync, and Publish handoffs; a session cache remains for compatibility.
 - **Publish:** unified Instagram/TikTok review through MuAPI Social plus the preserved direct private YouTube workflow.
 - **Advanced:** Agent Blueprints, Marketplace/Developer Templates, and legacy provider settings.

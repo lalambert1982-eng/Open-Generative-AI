@@ -47,6 +47,12 @@ test('Projects and Assets use the authenticated durable Project API with owner-s
     assert.match(projects, /aria-label=\{editor\.mode === 'create' \? 'Create Project' : 'Rename Project'\}/);
     assert.match(projects, /onSubmit=\{submitEditor\}/);
     assert.doesNotMatch(projects, /window\.prompt/);
+    assert.match(projects, /aria-label="Project Workspace"/);
+    assert.match(projects, /Continue with Selena/);
+    assert.match(projects, /Build Storyboard/);
+    assert.match(projects, /Prepare Publish/);
+    assert.match(projects, /onNavigate\?\.\(action\.path\)/);
+    assert.match(shell, /onNavigate=\{navigate\}/);
     assert.match(projects, /Recent Projects/);
     assert.match(assets, /Upload Asset/);
     assert.match(projectRoute, /authorizeCreatorRequest/);
