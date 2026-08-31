@@ -101,6 +101,7 @@ export default function SocialPublishStudio({ initialAsset = null, initialDraft 
   const [error, setError] = useState("");
   const [post, setPost] = useState(null);
   const operationToken = useRef(0);
+  const publishInFlightRef = useRef(false);
 
   const platformAccounts = useMemo(
     () => accounts.filter((account) => account.platform === platform && account.connected),
@@ -228,7 +229,11 @@ export default function SocialPublishStudio({ initialAsset = null, initialDraft 
   }
 
   async function confirmPublish() {
-    if (working || !approved) return;
+    // A React-state check alone is not synchronous: a very fast double-click can invoke this
+    // handler twice before the "working" state re-render commits, dispatching two publish
+    // requests. Guard with a ref that is set synchronously on the first call.
+    if (publishInFlightRef.current || working || !approved) return;
+    publishInFlightRef.current = true;
     const token = operationToken.current + 1;
     operationToken.current = token;
     setWorking(true);
@@ -262,6 +267,7 @@ export default function SocialPublishStudio({ initialAsset = null, initialDraft 
     } catch (publishError) {
       if (operationToken.current === token) setError(publishError.message || "Social publishing failed.");
     } finally {
+      publishInFlightRef.current = false;
       if (operationToken.current === token) setWorking(false);
     }
   }

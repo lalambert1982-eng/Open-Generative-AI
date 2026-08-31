@@ -228,7 +228,12 @@ export default function StandaloneShell() {
 
   useEffect(() => {
     setMounted(true);
-    setAssets(loadAssets());
+    // Only seed from the session-scoped compatibility cache when no durable Project is
+    // pending load; otherwise this would briefly flash a previous Project's assets before
+    // refreshProjects() replaces them with the real, current Project's Assets.
+    let pendingProjectId = '';
+    try { pendingProjectId = window.localStorage.getItem(CURRENT_PROJECT_STORAGE_KEY) || ''; } catch {}
+    if (!pendingProjectId) setAssets(loadAssets());
     const legacy = window.localStorage.getItem(STORAGE_KEY);
     const stored = window.sessionStorage.getItem(STORAGE_KEY) || legacy;
     if (stored) {
@@ -433,10 +438,23 @@ export default function StandaloneShell() {
     };
     const target = targets[action?.action];
     if (!target || action?.available === false) return;
-    const requestedAsset = action?.parameters?.assetId
-      ? assets.find((asset) => asset.id === action.parameters.assetId)
-      : null;
-    if (requestedAsset) setHandoffAsset(requestedAsset);
+    if (action?.parameters?.assetId) {
+      const requestedAsset = assets.find((asset) => asset.id === action.parameters.assetId);
+      if (!requestedAsset) {
+        setNotifications((previous) => [
+          {
+            id: `${Date.now()}-${Math.random()}`,
+            type: 'error',
+            label: 'Selena',
+            message: 'That asset is no longer available in this Project. It may have been deleted or belong to a different Project.',
+          },
+          ...previous,
+        ].slice(0, 3));
+        setHandoffAsset(null);
+        return;
+      }
+      setHandoffAsset(requestedAsset);
+    }
     setSelenaAction(action);
     navigate(target);
   }, [assets, navigate]);
