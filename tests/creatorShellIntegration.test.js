@@ -143,3 +143,25 @@ test('unified Publish preserves direct YouTube and adds secure Asset handoff for
     assert.match(route, /authorizeCreatorRequest/);
     assert.match(route, /evaluateJsonSafety/);
 });
+
+test('Selena action handoff rejects a stale or foreign-Project asset instead of navigating silently', async () => {
+    const shell = await read('../components/StandaloneShell.js');
+    assert.match(shell, /assets\.find\(\(asset\) => asset\.id === action\.parameters\.assetId\)/);
+    assert.match(shell, /if \(!requestedAsset\) \{/);
+    assert.match(shell, /no longer available in this Project/);
+    assert.match(shell, /setHandoffAsset\(null\);\s*\n\s*return;/);
+});
+
+test('shell mount does not seed a previous Project\'s cached Assets while a durable Project load is pending', async () => {
+    const shell = await read('../components/StandaloneShell.js');
+    assert.match(shell, /pendingProjectId = window\.localStorage\.getItem\(CURRENT_PROJECT_STORAGE_KEY\)/);
+    assert.match(shell, /if \(!pendingProjectId\) setAssets\(loadAssets\(\)\);/);
+});
+
+test('Social publish confirmation guards against a double-submit race with a synchronous ref', async () => {
+    const social = await read('../packages/studio/src/components/SocialPublishStudio.jsx');
+    assert.match(social, /const publishInFlightRef = useRef\(false\);/);
+    assert.match(social, /if \(publishInFlightRef\.current \|\| working \|\| !approved\) return;/);
+    assert.match(social, /publishInFlightRef\.current = true;/);
+    assert.match(social, /publishInFlightRef\.current = false;/);
+});
