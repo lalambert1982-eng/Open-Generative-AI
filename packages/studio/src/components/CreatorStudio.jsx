@@ -193,6 +193,7 @@ function ToolButton({ tool, active, provider, onClick }) {
       )}
       <Icon size={21} strokeWidth={1.8} />
       <span
+        aria-hidden="true"
         className={cx(
           "absolute right-2 top-2 h-1.5 w-1.5 rounded-full",
           configured ? "bg-emerald-400" : "bg-amber-400",

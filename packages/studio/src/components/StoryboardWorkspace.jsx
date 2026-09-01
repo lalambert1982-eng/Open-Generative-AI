@@ -63,7 +63,7 @@ function AssetCard({ asset, onSelect }) {
         {isVideo ? (
           <video src={asset.url} muted preload="metadata" className="h-full w-full object-cover opacity-80 transition group-hover:opacity-100" />
         ) : (
-          <img src={asset.url} alt="" className="h-full w-full object-cover opacity-80 transition group-hover:opacity-100" />
+          <img src={asset.url} alt={asset.title} className="h-full w-full object-cover opacity-80 transition group-hover:opacity-100" />
         )}
         <span className="absolute bottom-1.5 left-1.5 flex h-6 w-6 items-center justify-center rounded-lg bg-black/75 text-white">
           {isVideo ? <Film size={12} /> : <ImageIcon size={12} />}
@@ -136,12 +136,12 @@ function SceneCard({ scene, selected, onSelect, canDelete, onDuplicate, onDelete
           {scene.videoUrl ? (
             <video src={scene.videoUrl} muted preload="metadata" className="h-full w-full object-cover" />
           ) : scene.imageUrl ? (
-            <img src={scene.imageUrl} alt="" className="h-full w-full object-cover" />
+            <img src={scene.imageUrl} alt={`Scene still for ${scene.title}`} className="h-full w-full object-cover" />
           ) : (
             <div className="flex h-full w-full items-center justify-center text-white/15"><PanelTop size={23} /></div>
           )}
           <span className="absolute left-2 top-2 rounded-lg bg-black/75 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-white/65">{scene.duration}s</span>
-          {scene.status.startsWith("generating") && <LoaderCircle size={15} className="absolute right-2 top-2 animate-spin text-cyan-200" />}
+          {scene.status.startsWith("generating") && <LoaderCircle size={15} className="absolute right-2 top-2 animate-spin text-cyan-200" role="status" aria-label="Generating" />}
         </div>
         <div className="px-3 pb-3 pt-2.5">
           <p className="truncate text-[11px] font-bold text-white/75">{scene.title}</p>
@@ -436,7 +436,7 @@ export default function StoryboardWorkspace({
                   <p className="mt-1.5 text-xs font-semibold text-white/70">Auto · {enginePath}</p>
                   <p className="mt-1 truncate text-[9px] text-white/28" title={engineModel}>{engineModel}</p>
                 </div>
-                <span className={cx("h-2 w-2 rounded-full", providerReady ? "bg-emerald-400" : "bg-amber-400")} />
+                <span aria-hidden="true" className={cx("h-2 w-2 rounded-full", providerReady ? "bg-emerald-400" : "bg-amber-400")} />
               </div>
               <p className="mt-3 text-[9px] leading-4 text-white/25">{provider?.status || "MuAPI setup required"}. Model selection stays server-side.</p>
             </div>

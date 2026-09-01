@@ -313,7 +313,7 @@ function UploadButton({ apiKey, maxImages, onSelect, onClear, initialUrls = [], 
     </div>
   ) : label === "Swap Face" ? (
     hasSelection ? (
-      <img src={selectedEntries[0].url} alt="" className="w-full h-full object-cover" />
+      <img src={selectedEntries[0].url} alt="Selected face image for swap" className="w-full h-full object-cover" />
     ) : (
       <span className="text-[10px] font-bold text-white/50">Face</span>
     )
@@ -1541,7 +1541,7 @@ export default function ImageStudio({
             <div className="flex items-center gap-2.5 flex-wrap">
               {uploadedImageUrls && uploadedImageUrls.length > 0 && uploadedImageUrls.map((url, idx) => (
                 <div key={url} className={PROMPT_MEDIA_PREVIEW_CLASS}>
-                  <img src={url} alt="" className="w-full h-full object-cover" />
+                  <img src={url} alt={`Uploaded reference image ${idx + 1}`} className="w-full h-full object-cover" />
                   <button
                     type="button"
                     onClick={() => {

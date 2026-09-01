@@ -541,7 +541,7 @@ export default function StandaloneShell() {
         {isHeaderVisible && sidebarOpen && <button type="button" className="fixed inset-0 z-40 bg-black/70 md:hidden" onClick={() => setSidebarOpen(false)} aria-label="Close navigation overlay" />}
         {isHeaderVisible && (
           <aside className={`fixed bottom-0 left-0 top-0 z-50 flex flex-col border-r border-white/[0.07] bg-[#09090b] transition-transform md:static md:z-auto ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'} ${sidebarCollapsed ? 'w-64 md:w-[72px]' : 'w-64 md:w-60'}`}>
-            <div className="flex h-14 items-center justify-between border-b border-white/[0.07] px-4 md:hidden"><span className="text-xs font-black">G.FURY CREATOR</span><button type="button" onClick={() => setSidebarOpen(false)}><X size={18} /></button></div>
+            <div className="flex h-14 items-center justify-between border-b border-white/[0.07] px-4 md:hidden"><span className="text-xs font-black">G.FURY CREATOR</span><button type="button" onClick={() => setSidebarOpen(false)} aria-label="Close navigation menu"><X size={18} /></button></div>
             <nav aria-label="Creator Studio" className="flex-1 overflow-y-auto px-2 py-3">
               {NAV_GROUPS.map((group, index) => {
                 const open = !group.label || openGroups.has(group.label) || sidebarCollapsed;
@@ -569,7 +569,7 @@ export default function StandaloneShell() {
 
       {(Object.values(generationCounts).some(Boolean) || notifications.length > 0) && <div aria-live="polite" className="fixed right-4 top-16 z-[100] w-[330px] max-w-[calc(100vw-32px)] space-y-2">
         {Object.entries(generationCounts).filter(([, count]) => count > 0).map(([id]) => <div key={id} className="rounded-xl border border-cyan-300/20 bg-[#101014] px-4 py-3 text-xs font-semibold shadow-2xl">{studioDestination(id).label} is working…</div>)}
-        {notifications.map((item) => <div key={item.id} role={item.type === 'error' ? 'alert' : 'status'} className={`rounded-xl border bg-[#101014] px-4 py-3 text-xs shadow-2xl ${item.type === 'error' ? 'border-red-300/20 text-red-200' : 'border-emerald-300/20 text-emerald-100'}`}><div className="flex justify-between gap-3"><span><strong>{item.label}</strong>{item.type === 'error' ? ` · ${item.message}` : ' · Complete'}</span><button type="button" onClick={() => setNotifications((previous) => previous.filter((value) => value.id !== item.id))}>×</button></div>{item.url && <a href={item.url} target="_blank" rel="noreferrer" className="mt-2 inline-block text-[10px] font-bold text-cyan-200">Open asset →</a>}</div>)}
+        {notifications.map((item) => <div key={item.id} role={item.type === 'error' ? 'alert' : 'status'} className={`rounded-xl border bg-[#101014] px-4 py-3 text-xs shadow-2xl ${item.type === 'error' ? 'border-red-300/20 text-red-200' : 'border-emerald-300/20 text-emerald-100'}`}><div className="flex justify-between gap-3"><span><strong>{item.label}</strong>{item.type === 'error' ? ` · ${item.message}` : ' · Complete'}</span><button type="button" aria-label="Dismiss notification" onClick={() => setNotifications((previous) => previous.filter((value) => value.id !== item.id))}>×</button></div>{item.url && <a href={item.url} target="_blank" rel="noreferrer" className="mt-2 inline-block text-[10px] font-bold text-cyan-200">Open asset →</a>}</div>)}
       </div>}
     </div>
   );
