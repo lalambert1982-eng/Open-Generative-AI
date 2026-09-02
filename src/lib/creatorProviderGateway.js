@@ -7,7 +7,6 @@ import {
     reasonWithBrain,
 } from './brainRouter.js';
 import {
-    ANTHROPIC_ASSISTANT_TOOL_ID,
     BRAIN_REASONING_TOOL_ID,
     ELEVENLABS_VOICE_TOOL_ID,
     OPENAI_IMAGE_TOOL_ID,
@@ -409,9 +408,7 @@ async function handleBrainReasoning(request, {
         }, { env, fetchImpl, providerOverride });
         return creatorJson({
             ...result,
-            toolId: providerOverride === 'anthropic'
-                ? ANTHROPIC_ASSISTANT_TOOL_ID
-                : BRAIN_REASONING_TOOL_ID,
+            toolId: BRAIN_REASONING_TOOL_ID,
             // Keep the legacy field while clients migrate to finishReason.
             stopReason: result.finishReason,
         });
@@ -468,21 +465,6 @@ export async function handleBrainAssistant(request, {
         const failure = brainErrorResponse(error);
         return creatorJson(failure.body, failure.status);
     }
-}
-
-export async function handleAnthropicAssistant(request, {
-    env = process.env,
-    fetchImpl = fetch,
-} = {}) {
-    return handleBrainReasoning(request, {
-        env: {
-            ...env,
-            BRAIN_SYSTEM_PROMPT: env.BRAIN_SYSTEM_PROMPT || env.ANTHROPIC_ASSISTANT_SYSTEM_PROMPT,
-        },
-        fetchImpl,
-        providerOverride: 'anthropic',
-        action: 'anthropic',
-    });
 }
 
 export async function handleOpenAiImage(request, {

@@ -3,9 +3,11 @@ import { evaluateJsonSafety } from './contentSafety.js';
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
+const MUAPI_API_BASE = 'https://api.muapi.ai';
 
 const DEFAULT_TIMEOUT_MS = 45_000;
+const MUAPI_AGENT_DEFAULT_POLL_INTERVAL_MS = 2_000;
+const MUAPI_AGENT_DEFAULT_POLL_TIMEOUT_MS = 40_000;
 const MAX_PROVIDER_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_TASK_CHARACTERS = 20_000;
 const MAX_CONTEXT_CHARACTERS = 30_000;
@@ -13,11 +15,15 @@ const MAX_INSTRUCTIONS_CHARACTERS = 20_000;
 const MAX_TOOLS = 20;
 
 export const BRAIN_PROVIDER_IDS = Object.freeze([
+    'muapi-agent',
     'gemini',
     'groq',
     'openrouter',
-    'anthropic',
 ]);
+
+export const DEFAULT_BRAIN_PROVIDER = 'muapi-agent';
+export const DEFAULT_BRAIN_FALLBACK_ORDER = Object.freeze(['muapi-agent', 'gemini', 'groq', 'openrouter']);
+export const DEFAULT_MUAPI_AGENT_SLUG = 'selena';
 
 export const BRAIN_SENSITIVITIES = Object.freeze([
     'PUBLIC',
@@ -27,13 +33,26 @@ export const BRAIN_SENSITIVITIES = Object.freeze([
 ]);
 
 export const DEFAULT_BRAIN_MODELS = Object.freeze({
+    'muapi-agent': DEFAULT_MUAPI_AGENT_SLUG,
     gemini: 'gemini-3.7-flash',
     groq: 'openai/gpt-oss-120b',
     openrouter: 'openrouter/free',
-    anthropic: 'claude-sonnet-5',
 });
 
+function muapiAgentKeyVariable(env) {
+    if (isConfigured(env.MUAPI_AGENT_API_KEY)) return 'MUAPI_AGENT_API_KEY';
+    return normalizedSecret(env.MUAPI_KEY_MODE).toLowerCase() === 'production'
+        ? 'MUAPI_PRODUCTION_API_KEY'
+        : 'MUAPI_API_KEY';
+}
+
 const PROVIDER_DEFINITIONS = Object.freeze({
+    'muapi-agent': Object.freeze({
+        id: 'muapi-agent',
+        label: 'MuAPI Agent',
+        keyVariable: muapiAgentKeyVariable,
+        modelVariable: 'MUAPI_AGENT_SLUG',
+    }),
     gemini: Object.freeze({
         id: 'gemini',
         label: 'Google Gemini',
@@ -52,13 +71,12 @@ const PROVIDER_DEFINITIONS = Object.freeze({
         keyVariable: 'OPENROUTER_API_KEY',
         modelVariable: 'OPENROUTER_MODEL',
     }),
-    anthropic: Object.freeze({
-        id: 'anthropic',
-        label: 'Anthropic',
-        keyVariable: 'ANTHROPIC_API_KEY',
-        modelVariable: 'ANTHROPIC_MODEL',
-    }),
 });
+
+function keyVariableFor(provider, env) {
+    const variable = PROVIDER_DEFINITIONS[provider].keyVariable;
+    return typeof variable === 'function' ? variable(env) : variable;
+}
 
 const MODE_INSTRUCTIONS = Object.freeze({
     plan: 'Return a concise, executable production plan with ordered steps and provider recommendations.',
@@ -106,7 +124,7 @@ function strictBoolean(value, fallback) {
 }
 
 function strictAttempts(value) {
-    if (value == null || value === '') return { value: 3 };
+    if (value == null || value === '') return { value: BRAIN_PROVIDER_IDS.length };
     const parsed = Number(value);
     if (!Number.isInteger(parsed) || parsed < 1 || parsed > BRAIN_PROVIDER_IDS.length) {
         return { error: `BRAIN_MAX_ATTEMPTS must be an integer from 1 to ${BRAIN_PROVIDER_IDS.length}.` };
@@ -120,7 +138,7 @@ function modelFor(provider, env) {
 }
 
 function providerKey(provider, env) {
-    return normalizedSecret(env[PROVIDER_DEFINITIONS[provider].keyVariable]);
+    return normalizedSecret(env[keyVariableFor(provider, env)]);
 }
 
 function parseSensitivityProviders(env, sensitivity) {
@@ -132,14 +150,14 @@ function parseSensitivityProviders(env, sensitivity) {
 }
 
 export function getBrainConfiguration(env = process.env) {
-    const selectedProvider = normalizedSecret(env.BRAIN_PROVIDER).toLowerCase() || 'gemini';
+    const selectedProvider = normalizedSecret(env.BRAIN_PROVIDER).toLowerCase() || DEFAULT_BRAIN_PROVIDER;
     const fallback = strictBoolean(env.BRAIN_ENABLE_AUTOMATIC_FALLBACK, true);
     const attempts = strictAttempts(env.BRAIN_MAX_ATTEMPTS);
     const rawFallbackEntries = typeof env.BRAIN_FALLBACK_ORDER === 'string'
         ? env.BRAIN_FALLBACK_ORDER.split(',').map((entry) => entry.trim().toLowerCase()).filter(Boolean)
         : [];
     const configuredOrder = env.BRAIN_FALLBACK_ORDER == null || env.BRAIN_FALLBACK_ORDER === ''
-        ? ['gemini', 'groq', 'openrouter']
+        ? [...DEFAULT_BRAIN_FALLBACK_ORDER]
         : parseProviderList(env.BRAIN_FALLBACK_ORDER);
     const errors = [];
 
@@ -176,12 +194,12 @@ export function brainProviderStatuses(env = process.env) {
     const confidentialProviders = parseSensitivityProviders(env, 'CLIENT_CONFIDENTIAL');
     return BRAIN_PROVIDER_IDS.map((provider) => {
         const definition = PROVIDER_DEFINITIONS[provider];
-        const configured = isConfigured(env[definition.keyVariable]);
+        const configured = isConfigured(env[keyVariableFor(provider, env)]);
         return {
             id: provider,
             label: definition.label,
             category: 'brain',
-            capability: 'Reasoning',
+            capability: provider === 'muapi-agent' ? 'Agent reasoning' : 'Reasoning',
             built: true,
             configured,
             tested: false,
@@ -374,14 +392,6 @@ function geminiTools(tools) {
     }];
 }
 
-function anthropicTools(tools) {
-    return tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        input_schema: tool.inputSchema,
-    }));
-}
-
 function safeJsonParse(value) {
     if (typeof value !== 'string') return null;
     try {
@@ -489,13 +499,13 @@ async function readJsonResponse(response, provider) {
     return value;
 }
 
-async function providerFetch(provider, fetchImpl, url, options) {
+async function providerFetch(provider, fetchImpl, url, options, timeoutMs = DEFAULT_TIMEOUT_MS) {
     let response;
     try {
         response = await fetchImpl(url, {
             ...options,
             redirect: 'error',
-            signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+            signal: AbortSignal.timeout(Math.max(1, timeoutMs)),
         });
     } catch (error) {
         const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';
@@ -665,66 +675,125 @@ async function callOpenAiCompatible(provider, request, { env, fetchImpl, model, 
     });
 }
 
-async function callAnthropic(request, { env, fetchImpl, model, key }) {
-    const prompts = brainPrompts(request, {
-        ...env,
-        BRAIN_SYSTEM_PROMPT: env.BRAIN_SYSTEM_PROMPT || env.ANTHROPIC_ASSISTANT_SYSTEM_PROMPT,
-    });
-    const body = {
-        model,
-        max_tokens: Number.isFinite(Number(env.ANTHROPIC_MAX_TOKENS))
-            ? Math.min(16_000, Math.max(512, Math.round(Number(env.ANTHROPIC_MAX_TOKENS))))
-            : 6000,
-        system: prompts.system,
-        messages: [{ role: 'user', content: prompts.user }],
-    };
-    if (request.tools.length > 0) body.tools = anthropicTools(request.tools);
-    const value = await providerFetch('anthropic', fetchImpl, ANTHROPIC_API_URL, {
-        method: 'POST',
-        headers: {
-            'content-type': 'application/json',
-            'x-api-key': key,
-            'anthropic-version': env.ANTHROPIC_API_VERSION || '2023-06-01',
-        },
-        body: JSON.stringify(body),
-    });
-    if (isSafetyReason(value?.stop_reason)) {
-        throw new BrainRouterError('safety_rejection', 'Anthropic rejected the request for safety reasons.', 422, {
-            provider: 'anthropic',
+function boundedInteger(value, fallback, minimum, maximum) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(maximum, Math.max(minimum, Math.round(parsed)));
+}
+
+function agentMessageText(content) {
+    if (typeof content === 'string') return content.trim();
+    if (Array.isArray(content)) {
+        return content
+            .map((block) => (typeof block === 'string' ? block : typeof block?.text === 'string' ? block.text : ''))
+            .filter(Boolean)
+            .join('\n')
+            .trim();
+    }
+    return '';
+}
+
+function stripJsonFence(text) {
+    const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(text);
+    return match ? match[1].trim() : text;
+}
+
+function muapiAgentPrompt(request, env) {
+    const prompts = brainPrompts(request, env);
+    const sections = [prompts.system, prompts.user];
+    if (request.tools.length > 0) {
+        sections.push(`Available tools (describe which to use; do not claim to have run them):\n${
+            JSON.stringify(request.tools.map((tool) => ({ name: tool.name, description: tool.description })))
+        }`);
+    }
+    if (request.desiredOutput.type === 'json') {
+        sections.push(request.desiredOutput.schema
+            ? `Respond with only a JSON object matching this schema, without markdown fences:\n${JSON.stringify(request.desiredOutput.schema)}`
+            : 'Respond with only a JSON object, without markdown fences.');
+    }
+    return sections.join('\n\n');
+}
+
+async function callMuapiAgent(request, { env, fetchImpl, model, key }) {
+    if (!/^[A-Za-z0-9_-]{1,120}$/.test(model)) {
+        throw new BrainRouterError('provider_configuration_missing', 'MUAPI_AGENT_SLUG is not a valid agent slug.', 503, {
+            provider: 'muapi-agent',
         });
     }
-    const blocks = Array.isArray(value?.content) ? value.content : [];
-    const text = blocks
-        .filter((block) => block?.type === 'text' && typeof block.text === 'string')
-        .map((block) => block.text)
-        .join('\n')
-        .trim();
-    const toolCalls = blocks
-        .filter((block) => block?.type === 'tool_use' && typeof block.name === 'string')
-        .map((block, index) => ({
-            id: typeof block.id === 'string' ? block.id : `anthropic-call-${index + 1}`,
-            name: block.name,
-            arguments: block.input && typeof block.input === 'object' && !Array.isArray(block.input)
-                ? block.input
-                : {},
-        }));
-    const usage = value?.usage || {};
-    return resultOrMalformed('anthropic', {
-        provider: 'anthropic',
-        model: typeof value?.model === 'string' ? value.model : model,
+    const headers = { 'content-type': 'application/json', 'x-api-key': key };
+    const submitted = await providerFetch(
+        'muapi-agent',
+        fetchImpl,
+        `${MUAPI_API_BASE}/agents/by-slug/${encodeURIComponent(model)}/chat`,
+        {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+                message: muapiAgentPrompt(request, env),
+                conversation_id: null,
+                attachments: null,
+                stream: false,
+            }),
+        },
+    );
+    const requestId = typeof submitted?.request_id === 'string' ? submitted.request_id : '';
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId)) {
+        throw new BrainRouterError('malformed_provider_response', 'MuAPI Agent did not return a request ID.', 502, {
+            provider: 'muapi-agent',
+            fallbackEligible: true,
+        });
+    }
+
+    const interval = boundedInteger(env.MUAPI_AGENT_POLL_INTERVAL_MS, MUAPI_AGENT_DEFAULT_POLL_INTERVAL_MS, 100, 10_000);
+    const timeout = boundedInteger(env.MUAPI_AGENT_POLL_TIMEOUT_MS, MUAPI_AGENT_DEFAULT_POLL_TIMEOUT_MS, interval, 120_000);
+    const deadline = Date.now() + timeout;
+    let value = null;
+    let polled = false;
+    while (!polled || Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, Math.max(1, Math.min(interval, deadline - Date.now()))));
+        polled = true;
+        value = await providerFetch(
+            'muapi-agent',
+            fetchImpl,
+            `${MUAPI_API_BASE}/api/v1/predictions/${encodeURIComponent(requestId)}/result`,
+            { method: 'GET', headers },
+            Math.min(DEFAULT_TIMEOUT_MS, Math.max(1, deadline - Date.now())),
+        );
+        if (value?.is_complete === true) break;
+        if (/^(failed|error|cancel)/i.test(String(value?.status || ''))) {
+            throw new BrainRouterError('provider_rejected', 'MuAPI Agent failed to complete the reasoning request.', 422, {
+                provider: 'muapi-agent',
+            });
+        }
+        value = null;
+    }
+    if (!value) {
+        throw new BrainRouterError('provider_timeout', 'MuAPI Agent request timed out.', 504, {
+            provider: 'muapi-agent',
+            fallbackEligible: true,
+        });
+    }
+
+    const messages = Array.isArray(value.messages) ? value.messages : [];
+    const assistant = [...messages].reverse().find((message) => message?.role === 'assistant' && agentMessageText(message.content));
+    const text = stripJsonFence(agentMessageText(assistant?.content));
+    return resultOrMalformed('muapi-agent', {
+        provider: 'muapi-agent',
+        model,
         text,
         structuredOutput: normalizeStructuredOutput(text, request.desiredOutput),
-        toolCalls,
-        usage: normalizedUsage(usage.input_tokens, usage.output_tokens),
-        finishReason: value?.stop_reason || null,
+        toolCalls: [],
+        usage: normalizedUsage(null, null, null),
+        finishReason: 'complete',
+        conversationId: typeof value.conversation_id === 'string' ? value.conversation_id : null,
     });
 }
 
 const PROVIDER_CALLERS = Object.freeze({
+    'muapi-agent': callMuapiAgent,
     gemini: callGemini,
     groq: (request, options) => callOpenAiCompatible('groq', request, options),
     openrouter: (request, options) => callOpenAiCompatible('openrouter', request, options),
-    anthropic: callAnthropic,
 });
 
 export class BrainRouterError extends Error {

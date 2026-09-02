@@ -10,7 +10,7 @@ Creator Studio is the shell. Selena is the primary agent identity. Provider brai
 User
   → Selena
   → POST /api/creator/assistant
-  → Brain Router (Gemini, bounded fallbacks)
+  → Brain Router (MuAPI Agent, bounded Gemini/Groq/OpenRouter fallbacks)
   → plan / recommendation
   → explicit tool or workflow action
   → validation / approval
@@ -69,6 +69,8 @@ When a Project is selected, Selena receives only server-loaded, bounded Project,
 ## Agent Blueprints
 
 `AgentStudio` is preserved and renamed in navigation as **Advanced → Agent Blueprints**. Its templates, agents, chats, create flow, and conversations remain the generic MuAPI Agent product. Studio use now supplies `/studio/advanced/agents` as its base path so create/chat/back transitions stay inside the shell. Standalone `/agents/*` pages remain available and unchanged.
+
+Selena's own reasoning runs through one of these agents: the server-side `muapi-agent` brain provider chats with the Agent Blueprint named by `MUAPI_AGENT_SLUG` (default `selena`) using the server-owned MuAPI key, polls the prediction result within a bounded window, and normalizes the agent's reply into Selena's allowlisted plan contract. The agent never executes generation, publishing, deletion, or spending; those still go through the existing approval-gated workspaces.
 
 ## Graphic Studio and CreativeCanvas
 

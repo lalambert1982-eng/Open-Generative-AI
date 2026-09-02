@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-    handleAnthropicAssistant,
     handleBrainAssistant,
     handleCreatorProviders,
     handleMuapiImage,
@@ -71,14 +70,14 @@ test('creator gateway rejects missing, tampered, or weak session authentication'
 
 test('creator gateway rejects cross-origin paid mutations even with a valid session', async () => {
     resetRateLimitStore();
-    const response = await handleAnthropicAssistant(
+    const response = await handleBrainAssistant(
         creatorRequest(
             'assistant',
             { prompt: 'Build a short launch plan.', mode: 'plan' },
             session,
             { origin: 'https://attacker.test', 'sec-fetch-site': 'cross-site' },
         ),
-        { env: { ...baseEnv, ANTHROPIC_API_KEY: 'anthropic-provider-secret' } },
+        { env: { ...baseEnv, MUAPI_API_KEY: 'muapi-provider-secret', MUAPI_KEY_MODE: 'sandbox' } },
     );
     assert.equal(response.status, 403);
 });
@@ -169,7 +168,6 @@ test('provider status reports readiness without disclosing provider credentials'
         GEMINI_API_KEY: 'gemini-provider-secret',
         GROQ_API_KEY: 'groq-provider-secret',
         OPENROUTER_API_KEY: 'openrouter-provider-secret',
-        ANTHROPIC_API_KEY: 'anthropic-provider-secret',
         OPENAI_API_KEY: 'openai-provider-secret',
         ELEVENLABS_API_KEY: 'elevenlabs-provider-secret',
         ELEVENLABS_VOICE_ID: 'elevenlabs-voice-id',
@@ -183,8 +181,6 @@ test('provider status reports readiness without disclosing provider credentials'
         env: {
             ...baseEnv,
             ...secrets,
-            BRAIN_PROVIDER: 'gemini',
-            BRAIN_FALLBACK_ORDER: 'gemini,groq,openrouter',
             MUAPI_KEY_MODE: 'sandbox',
             MUAPI_ALLOW_PAID_GENERATION: 'false',
         },
@@ -202,10 +198,10 @@ test('provider status reports readiness without disclosing provider credentials'
     ]);
     assert.deepEqual(body.providers[1].toolIds, [MUAPI_IMAGE_TOOL_ID, MUAPI_VIDEO_TOOL_ID]);
     assert.deepEqual(body.brainProviders.map((provider) => provider.id), [
+        'muapi-agent',
         'gemini',
         'groq',
         'openrouter',
-        'anthropic',
     ]);
     assert.deepEqual(body.generationProviders.map((provider) => provider.id), [
         'muapi',
@@ -213,7 +209,7 @@ test('provider status reports readiness without disclosing provider credentials'
         'heygen',
     ]);
     assert.deepEqual(body.deferredGenerationProviders.map((provider) => provider.id), ['openai', 'runway']);
-    assert.equal(body.brain.selectedProvider, 'gemini');
+    assert.equal(body.brain.selectedProvider, 'muapi-agent');
     for (const secret of Object.values(secrets)) assert.equal(text.includes(secret), false);
     assert.equal(text.includes(session), false);
 });
@@ -290,10 +286,10 @@ test('MuAPI status polling is authenticated, rate limited, and returns no server
 test('creator gateway blocks unsafe prompts before any provider call', async () => {
     resetRateLimitStore();
     let called = false;
-    const response = await handleAnthropicAssistant(
+    const response = await handleBrainAssistant(
         creatorRequest('assistant', { prompt: 'Create explicit sexual content involving a child.' }),
         {
-            env: { ...baseEnv, ANTHROPIC_API_KEY: 'anthropic-provider-secret' },
+            env: { ...baseEnv, MUAPI_API_KEY: 'muapi-provider-secret', MUAPI_KEY_MODE: 'sandbox' },
             fetchImpl: async () => {
                 called = true;
                 return new Response('{}');
@@ -306,40 +302,62 @@ test('creator gateway blocks unsafe prompts before any provider call', async () 
     assert.equal((await response.json()).reason, 'sexual_content_involving_minors');
 });
 
-test('Anthropic assistant keeps both access and provider secrets server-side', async () => {
+test('Selena defaults to the MuAPI Agent brain and keeps both access and agent secrets server-side', async () => {
     resetRateLimitStore();
-    const providerKey = 'anthropic-provider-secret';
-    let captured;
-    const response = await handleAnthropicAssistant(
+    const providerKey = 'muapi-provider-secret';
+    const calls = [];
+    const response = await handleBrainAssistant(
         creatorRequest('assistant', { prompt: 'Build a short launch plan.', mode: 'plan' }),
         {
-            env: { ...baseEnv, ANTHROPIC_API_KEY: providerKey },
+            env: {
+                ...baseEnv,
+                MUAPI_API_KEY: providerKey,
+                MUAPI_KEY_MODE: 'sandbox',
+                MUAPI_AGENT_POLL_INTERVAL_MS: '100',
+                MUAPI_AGENT_POLL_TIMEOUT_MS: '500',
+            },
             fetchImpl: async (url, options) => {
-                captured = { url, options };
+                calls.push({ url, options });
+                if (url.endsWith('/chat')) {
+                    return new Response(JSON.stringify({ request_id: 'req_selena', status: 'processing' }), { status: 200 });
+                }
                 return new Response(JSON.stringify({
-                    model: 'claude-sonnet-5',
-                    content: [{ type: 'text', text: '1. Draft the hook.\n2. Build the assets.' }],
-                    stop_reason: 'end_turn',
-                    usage: { input_tokens: 12, output_tokens: 18 },
-                }), {
-                    status: 200,
-                    headers: { 'content-type': 'application/json' },
-                });
+                    is_complete: true,
+                    conversation_id: 'conv_selena',
+                    messages: [{
+                        role: 'assistant',
+                        content: JSON.stringify({
+                            message: 'I prepared a safe launch plan.',
+                            plan: ['Draft the hook.', 'Build the assets.'],
+                            suggestedActions: [{
+                                action: 'image.generate',
+                                parameters: { prompt: 'A cinematic launch graphic.', aspectRatio: '16:9' },
+                            }],
+                            referencedAssets: [],
+                        }),
+                    }],
+                }), { status: 200 });
             },
         },
     );
 
     assert.equal(response.status, 200);
-    assert.equal(captured.url, 'https://api.anthropic.com/v1/messages');
-    assert.equal(captured.options.headers['x-api-key'], providerKey);
-    assert.equal(captured.options.headers.cookie, undefined);
-    const upstreamBody = JSON.parse(captured.options.body);
-    assert.equal(upstreamBody.messages[0].content, 'Task:\nBuild a short launch plan.');
+    assert.equal(calls[0].url, 'https://api.muapi.ai/agents/by-slug/selena/chat');
+    assert.equal(calls[0].options.headers['x-api-key'], providerKey);
+    assert.equal(calls[0].options.headers.cookie, undefined);
+    assert.equal(JSON.parse(calls[0].options.body).message.includes('Task:\nBuild a short launch plan.'), true);
+    assert.equal(calls[1].url, 'https://api.muapi.ai/api/v1/predictions/req_selena/result');
 
     const text = await response.text();
+    const body = JSON.parse(text);
+    assert.equal(body.provider, 'muapi-agent');
+    assert.equal(body.toolId, BRAIN_REASONING_TOOL_ID);
+    assert.equal(body.text, 'I prepared a safe launch plan.');
+    assert.deepEqual(body.plan, ['Draft the hook.', 'Build the assets.']);
+    assert.equal(body.suggestedActions[0].requiresApproval, true);
+    assert.equal(body.requiresApproval, true);
     assert.equal(text.includes(providerKey), false);
     assert.equal(text.includes(session), false);
-    assert.equal(JSON.parse(text).text.includes('Draft the hook'), true);
 });
 
 test('OpenAI image proxy returns image bytes without exposing the API key', async () => {

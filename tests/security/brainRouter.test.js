@@ -21,8 +21,11 @@ const baseEnv = {
     GROQ_MODEL: 'openai/gpt-oss-120b',
     OPENROUTER_API_KEY: 'openrouter-test-provider-secret',
     OPENROUTER_MODEL: 'openrouter/free',
-    ANTHROPIC_API_KEY: 'anthropic-test-provider-secret',
-    ANTHROPIC_MODEL: 'claude-sonnet-5',
+    MUAPI_API_KEY: 'muapi-test-provider-secret',
+    MUAPI_KEY_MODE: 'sandbox',
+    MUAPI_AGENT_SLUG: 'selena',
+    MUAPI_AGENT_POLL_INTERVAL_MS: '100',
+    MUAPI_AGENT_POLL_TIMEOUT_MS: '600',
 };
 
 const request = {
@@ -135,26 +138,174 @@ test('OpenRouter adapter uses the current free router and reports the model actu
     assert.equal(result.model, 'selected/free-model');
 });
 
-test('Anthropic remains available through the normalized brain interface', async () => {
-    let captured;
+function muapiAgentFetch(assistantContent, { pendingPolls = 0, capture = null } = {}) {
+    let polls = 0;
+    return async (url, options) => {
+        if (capture) capture.calls.push({ url, options });
+        if (url.endsWith('/chat')) {
+            return new Response(JSON.stringify({ request_id: 'req_123', status: 'processing' }), { status: 200 });
+        }
+        polls += 1;
+        if (polls <= pendingPolls) {
+            return new Response(JSON.stringify({ is_complete: false, status: 'processing' }), { status: 200 });
+        }
+        return new Response(JSON.stringify({
+            is_complete: true,
+            conversation_id: 'conv_1',
+            messages: [
+                { role: 'pulse', content: 'thinking' },
+                { role: 'assistant', content: assistantContent },
+            ],
+        }), { status: 200 });
+    };
+}
+
+test('MuAPI Agent is the default Selena brain and polls the prediction result server-side', async () => {
+    const capture = { calls: [] };
     const result = await reasonWithBrain(request, {
-        env: { ...baseEnv, BRAIN_PROVIDER: 'anthropic', BRAIN_ENABLE_AUTOMATIC_FALLBACK: 'false' },
-        fetchImpl: async (url, options) => {
-            captured = { url, options };
-            return new Response(JSON.stringify({
-                model: 'claude-sonnet-5',
-                content: [{ type: 'text', text: 'Anthropic plan' }],
-                stop_reason: 'end_turn',
-                usage: { input_tokens: 11, output_tokens: 7 },
-            }), { status: 200 });
+        env: { ...baseEnv, BRAIN_PROVIDER: '', BRAIN_FALLBACK_ORDER: '', BRAIN_ENABLE_AUTOMATIC_FALLBACK: 'false' },
+        fetchImpl: muapiAgentFetch('Agent plan', { pendingPolls: 1, capture }),
+    });
+
+    assert.equal(capture.calls[0].url, 'https://api.muapi.ai/agents/by-slug/selena/chat');
+    assert.equal(capture.calls[0].options.headers['x-api-key'], baseEnv.MUAPI_API_KEY);
+    const submitted = JSON.parse(capture.calls[0].options.body);
+    assert.equal(submitted.stream, false);
+    assert.equal(submitted.message.includes('Task:\nCreate a short launch plan.'), true);
+    assert.equal(capture.calls[1].url, 'https://api.muapi.ai/api/v1/predictions/req_123/result');
+    assert.equal(capture.calls.length, 3);
+    assert.equal(result.provider, 'muapi-agent');
+    assert.equal(result.model, 'selena');
+    assert.equal(result.text, 'Agent plan');
+    assert.equal(result.conversationId, 'conv_1');
+});
+
+test('MuAPI Agent honours the configured slug, key mode, and structured output', async () => {
+    const capture = { calls: [] };
+    const result = await reasonWithBrain({ ...request, desiredOutput: 'json' }, {
+        env: {
+            ...baseEnv,
+            BRAIN_PROVIDER: 'muapi-agent',
+            BRAIN_ENABLE_AUTOMATIC_FALLBACK: 'false',
+            MUAPI_KEY_MODE: 'production',
+            MUAPI_PRODUCTION_API_KEY: 'muapi-production-secret',
+            MUAPI_AGENT_SLUG: 'selena-director',
+        },
+        fetchImpl: muapiAgentFetch([{ type: 'text', text: '```json\n{"message":"ok","plan":[]}\n```' }], { capture }),
+    });
+
+    assert.equal(capture.calls[0].url, 'https://api.muapi.ai/agents/by-slug/selena-director/chat');
+    assert.equal(capture.calls[0].options.headers['x-api-key'], 'muapi-production-secret');
+    assert.deepEqual(result.structuredOutput, { message: 'ok', plan: [] });
+});
+
+test('a MuAPI Agent timeout falls back to Gemini within the bounded poll window', async () => {
+    const calls = [];
+    const result = await reasonWithBrain(request, {
+        env: { ...baseEnv, BRAIN_PROVIDER: 'muapi-agent', BRAIN_FALLBACK_ORDER: 'muapi-agent,gemini' },
+        fetchImpl: async (url) => {
+            calls.push(url);
+            if (url.includes('generativelanguage')) return geminiSuccess('Gemini fallback');
+            if (url.endsWith('/chat')) {
+                return new Response(JSON.stringify({ request_id: 'req_slow' }), { status: 200 });
+            }
+            return new Response(JSON.stringify({ is_complete: false, status: 'processing' }), { status: 200 });
         },
     });
 
-    assert.equal(captured.url, 'https://api.anthropic.com/v1/messages');
-    assert.equal(captured.options.headers['x-api-key'], baseEnv.ANTHROPIC_API_KEY);
-    assert.equal(result.provider, 'anthropic');
-    assert.equal(result.text, 'Anthropic plan');
-    assert.deepEqual(result.usage, { inputTokens: 11, outputTokens: 7, totalTokens: 18 });
+    assert.equal(result.provider, 'gemini');
+    assert.equal(result.text, 'Gemini fallback');
+    assert.equal(calls.filter((url) => url.includes('/predictions/')).length <= 6, true);
+});
+
+test('a stalled MuAPI Agent poll is aborted at the deadline and falls back', async () => {
+    const startedAt = Date.now();
+    const result = await reasonWithBrain(request, {
+        env: { ...baseEnv, BRAIN_PROVIDER: 'muapi-agent', BRAIN_FALLBACK_ORDER: 'muapi-agent,gemini' },
+        fetchImpl: async (url, options) => {
+            if (url.includes('generativelanguage')) return geminiSuccess('Gemini fallback');
+            if (url.endsWith('/chat')) {
+                return new Response(JSON.stringify({ request_id: 'req_stalled' }), { status: 200 });
+            }
+            return new Promise((resolve, reject) => {
+                options.signal.addEventListener('abort', () => reject(options.signal.reason));
+                setTimeout(() => resolve(new Response(JSON.stringify({ is_complete: true, messages: [] }))), 5_000);
+            });
+        },
+    });
+
+    assert.equal(result.provider, 'gemini');
+    assert.equal(Date.now() - startedAt < 2_000, true);
+});
+
+test('a poll timeout equal to the interval still requests the result once', async () => {
+    const capture = { calls: [] };
+    const result = await reasonWithBrain(request, {
+        env: {
+            ...baseEnv,
+            BRAIN_PROVIDER: 'muapi-agent',
+            BRAIN_ENABLE_AUTOMATIC_FALLBACK: 'false',
+            MUAPI_AGENT_POLL_INTERVAL_MS: '100',
+            MUAPI_AGENT_POLL_TIMEOUT_MS: '100',
+        },
+        fetchImpl: muapiAgentFetch('Agent plan', { capture }),
+    });
+
+    assert.equal(capture.calls.filter(({ url }) => url.includes('/predictions/')).length, 1);
+    assert.equal(result.text, 'Agent plan');
+});
+
+test('a stalled MuAPI Agent poll with timeout equal to the interval still respects the timeout', async () => {
+    const startedAt = Date.now();
+    const result = await reasonWithBrain(request, {
+        env: {
+            ...baseEnv,
+            BRAIN_PROVIDER: 'muapi-agent',
+            BRAIN_FALLBACK_ORDER: 'muapi-agent,gemini',
+            MUAPI_AGENT_POLL_INTERVAL_MS: '300',
+            MUAPI_AGENT_POLL_TIMEOUT_MS: '300',
+        },
+        fetchImpl: async (url, options) => {
+            if (url.includes('generativelanguage')) return geminiSuccess('Gemini fallback');
+            if (url.endsWith('/chat')) {
+                return new Response(JSON.stringify({ request_id: 'req_stalled' }), { status: 200 });
+            }
+            return new Promise((resolve, reject) => {
+                options.signal.addEventListener('abort', () => reject(options.signal.reason));
+                setTimeout(() => resolve(new Response(JSON.stringify({ is_complete: true, messages: [] }))), 5_000);
+            });
+        },
+    });
+
+    assert.equal(result.provider, 'gemini');
+    assert.equal(Date.now() - startedAt < 1_500, true);
+});
+
+test('a failed MuAPI Agent prediction never falls back or leaks the agent key', async () => {
+    await assert.rejects(
+        reasonWithBrain(request, {
+            env: { ...baseEnv, BRAIN_PROVIDER: 'muapi-agent', BRAIN_FALLBACK_ORDER: 'muapi-agent,gemini' },
+            fetchImpl: async (url) => {
+                if (url.endsWith('/chat')) {
+                    return new Response(JSON.stringify({ request_id: 'req_bad' }), { status: 200 });
+                }
+                return new Response(JSON.stringify({ is_complete: false, status: 'failed' }), { status: 200 });
+            },
+        }),
+        (error) => {
+            assert.equal(error instanceof BrainRouterError, true);
+            assert.equal(error.code, 'provider_rejected');
+            assert.equal(JSON.stringify(brainErrorResponse(error)).includes(baseEnv.MUAPI_API_KEY), false);
+            return true;
+        },
+    );
+});
+
+test('Anthropic is no longer a recognised brain provider', () => {
+    const configuration = getBrainConfiguration({ ...baseEnv, BRAIN_PROVIDER: 'anthropic' });
+    assert.equal(configuration.valid, false);
+    assert.equal(configuration.errors.some((message) => message.includes('BRAIN_PROVIDER')), true);
+    assert.equal(brainProviderStatuses(baseEnv).some((provider) => provider.id === 'anthropic'), false);
 });
 
 test('a Gemini quota response falls back once to Groq', async () => {
@@ -402,12 +553,12 @@ test('brain status distinguishes build and configuration without exposing secret
     assert.equal(router.configured, true);
     assert.equal(router.built, true);
     assert.equal(router.selectedProvider, 'gemini');
-    assert.equal(providers.find((provider) => provider.id === 'anthropic').inFallbackOrder, false);
+    assert.equal(providers.find((provider) => provider.id === 'muapi-agent').inFallbackOrder, false);
     for (const key of [
         baseEnv.GEMINI_API_KEY,
         baseEnv.GROQ_API_KEY,
         baseEnv.OPENROUTER_API_KEY,
-        baseEnv.ANTHROPIC_API_KEY,
+        baseEnv.MUAPI_API_KEY,
     ]) assert.equal(serialized.includes(key), false);
 });
 

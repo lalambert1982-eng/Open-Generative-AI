@@ -1,5 +1,4 @@
 export const BRAIN_REASONING_TOOL_ID = 'brain_reasoning';
-export const ANTHROPIC_ASSISTANT_TOOL_ID = 'anthropic_assistant';
 export const MUAPI_IMAGE_TOOL_ID = 'muapi_image';
 export const MUAPI_VIDEO_TOOL_ID = 'muapi_video';
 export const OPENAI_IMAGE_TOOL_ID = 'openai_image';
@@ -36,16 +35,6 @@ export const BRAIN_REASONING_TOOL = Object.freeze({
         'finishReason',
         'error',
     ]),
-});
-
-export const ANTHROPIC_ASSISTANT_TOOL = Object.freeze({
-    id: ANTHROPIC_ASSISTANT_TOOL_ID,
-    provider: 'anthropic',
-    label: 'Anthropic Creative Assistant',
-    purpose: 'Turn a creative brief into production strategy, plans, prompts, or scripts.',
-    asynchronous: false,
-    accepts: Object.freeze(['prompt', 'mode']),
-    returns: Object.freeze(['provider', 'toolId', 'model', 'text', 'stopReason', 'usage', 'error']),
 });
 
 export const MUAPI_IMAGE_TOOL = Object.freeze({
@@ -209,7 +198,6 @@ export const TIKTOK_PUBLISH_TOOL = socialPublishTool(
 
 const CREATOR_TOOL_REGISTRY = Object.freeze({
     [BRAIN_REASONING_TOOL_ID]: BRAIN_REASONING_TOOL,
-    [ANTHROPIC_ASSISTANT_TOOL_ID]: ANTHROPIC_ASSISTANT_TOOL,
     [MUAPI_IMAGE_TOOL_ID]: MUAPI_IMAGE_TOOL,
     [MUAPI_VIDEO_TOOL_ID]: MUAPI_VIDEO_TOOL,
     [OPENAI_IMAGE_TOOL_ID]: OPENAI_IMAGE_TOOL,
