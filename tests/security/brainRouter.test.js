@@ -238,6 +238,23 @@ test('a stalled MuAPI Agent poll is aborted at the deadline and falls back', asy
     assert.equal(Date.now() - startedAt < 2_000, true);
 });
 
+test('a poll timeout equal to the interval still requests the result once', async () => {
+    const capture = { calls: [] };
+    const result = await reasonWithBrain(request, {
+        env: {
+            ...baseEnv,
+            BRAIN_PROVIDER: 'muapi-agent',
+            BRAIN_ENABLE_AUTOMATIC_FALLBACK: 'false',
+            MUAPI_AGENT_POLL_INTERVAL_MS: '100',
+            MUAPI_AGENT_POLL_TIMEOUT_MS: '100',
+        },
+        fetchImpl: muapiAgentFetch('Agent plan', { capture }),
+    });
+
+    assert.equal(capture.calls.filter(({ url }) => url.includes('/predictions/')).length, 1);
+    assert.equal(result.text, 'Agent plan');
+});
+
 test('a failed MuAPI Agent prediction never falls back or leaks the agent key', async () => {
     await assert.rejects(
         reasonWithBrain(request, {
