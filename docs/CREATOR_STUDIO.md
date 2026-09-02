@@ -8,10 +8,10 @@ Creator Studio is the private creative operating-system shell. Selena is its pri
 
 | Role | Provider | Required server variable | Model configuration |
 |---|---|---|---|
-| Primary | Google Gemini | `GEMINI_API_KEY` | `GEMINI_MODEL` |
-| Secondary fallback | Groq | `GROQ_API_KEY` | `GROQ_MODEL` |
-| Tertiary development fallback | OpenRouter | `OPENROUTER_API_KEY` | `OPENROUTER_MODEL` |
-| Optional premium / legacy assistant | Anthropic | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` |
+| Primary (Selena's brain) | MuAPI Agent (Agent Blueprint) | `MUAPI_API_KEY` / `MUAPI_PRODUCTION_API_KEY` (or `MUAPI_AGENT_API_KEY`) | `MUAPI_AGENT_SLUG` |
+| Secondary fallback | Google Gemini | `GEMINI_API_KEY` | `GEMINI_MODEL` |
+| Tertiary fallback | Groq | `GROQ_API_KEY` | `GROQ_MODEL` |
+| Development fallback | OpenRouter | `OPENROUTER_API_KEY` | `OPENROUTER_MODEL` |
 
 ### Generation and publishing providers
 
@@ -60,7 +60,7 @@ The server-only router in `src/lib/brainRouter.js` gives the existing Creator St
 ```text
 Selena / existing agent
   -> Brain Router
-  -> Gemini | Groq | OpenRouter | Anthropic
+  -> MuAPI Agent | Gemini | Groq | OpenRouter
   -> normalized reasoning result
   -> existing agent or approved tool workflow
 ```
@@ -71,7 +71,7 @@ The Creator assistant route adds a server-owned structured orchestration contrac
 
 When a Project ID is supplied, the server loads the Project using the authenticated owner identity. The prompt receives only bounded Project/Storyboard/Asset summaries. Browser-supplied Project context, media URLs, and provider metadata are not trusted as Selena context.
 
-The initial order is `gemini,groq,openrouter`. Anthropic remains fully supported through the existing `anthropic_assistant` compatibility boundary and can be selected with `BRAIN_PROVIDER=anthropic` or added later to `BRAIN_FALLBACK_ORDER`. It is intentionally absent from the initial fallback list.
+The default order is `muapi-agent,gemini,groq,openrouter`. The `muapi-agent` adapter sends the bounded Selena prompt to `POST https://api.muapi.ai/agents/by-slug/{MUAPI_AGENT_SLUG}/chat` and polls `/api/v1/predictions/{request_id}/result` server-side until the agent turn completes (bounded by `MUAPI_AGENT_POLL_INTERVAL_MS` / `MUAPI_AGENT_POLL_TIMEOUT_MS`). The agent's last assistant message is normalized into the same `text` / `structuredOutput` result as every other provider, so Selena's allowlisted plan contract and approval gates are unchanged. A timeout or transient agent failure may fall back to Gemini; a failed prediction does not. Anthropic is no longer a supported brain provider and `ANTHROPIC_*` variables are ignored.
 
 Automatic fallback is bounded by `BRAIN_MAX_ATTEMPTS`. It is allowed for timeouts, transient provider failures, rate/quota limits, malformed provider responses, and explicitly unsupported capabilities. It is not allowed for safety rejection, invalid input, invalid/missing credentials, or requests marked as publishing, paid generation, another external mutation, or requiring explicit approval.
 
@@ -117,7 +117,7 @@ HEYGEN_VOICE_ID=aecf8d74f6b8467b84d24e9dc541b19a
 
 Creator Studio submits text-to-avatar jobs to HeyGen asynchronously and polls the fixed HeyGen video-status endpoint. The default canvas is portrait `9:16` at `1080p`, with social captions enabled in the UI. The authenticated browser receives only a normalized job ID, status, HTTPS video and thumbnail URLs, duration, and sanitized error information.
 
-The reusable server-side tool registry exposes provider-neutral reasoning as `brain_reasoning`, active `muapi_image` and `muapi_video` boundaries, and the existing `elevenlabs_voice`, `heygen_avatar_video`, and `youtube_publish` boundaries. The preserved `anthropic_assistant`, `openai_image`, and `runway_video` definitions remain available as compatibility metadata; OpenAI and Runway are explicitly marked deferred. These definitions do not recreate agents or duplicate generation-provider adapters.
+The reusable server-side tool registry exposes provider-neutral reasoning as `brain_reasoning`, active `muapi_image` and `muapi_video` boundaries, and the existing `elevenlabs_voice`, `heygen_avatar_video`, and `youtube_publish` boundaries. The preserved `openai_image` and `runway_video` definitions remain available as compatibility metadata and are explicitly marked deferred. These definitions do not recreate agents or duplicate generation-provider adapters.
 
 The `heygen_avatar_video` boundary resolves the default avatar and voice from `HEYGEN_AVATAR_ID` and `HEYGEN_VOICE_ID`, never from browser input or a client-readable environment variable. It accepts validated optional avatar/voice overrides, background configuration, captions, and supported motion settings. The payload builder already separates script input from media input so a later `ElevenLabs → audio URL/asset → HeyGen lip-sync` path can be added without replacing the current HeyGen voice workflow.
 
