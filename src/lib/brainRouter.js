@@ -746,12 +746,12 @@ async function callMuapiAgent(request, { env, fetchImpl, model, key }) {
 
     const interval = boundedInteger(env.MUAPI_AGENT_POLL_INTERVAL_MS, MUAPI_AGENT_DEFAULT_POLL_INTERVAL_MS, 100, 10_000);
     const timeout = boundedInteger(env.MUAPI_AGENT_POLL_TIMEOUT_MS, MUAPI_AGENT_DEFAULT_POLL_TIMEOUT_MS, interval, 120_000);
-    // The deadline covers every sleep and in-flight result request; the first
-    // result request is always attempted so short windows still resolve.
-    const deadline = Date.now() + timeout + interval;
+    const deadline = Date.now() + timeout;
     let value = null;
-    while (Date.now() + interval < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, interval));
+    let polled = false;
+    while (!polled || Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, Math.max(1, Math.min(interval, deadline - Date.now()))));
+        polled = true;
         value = await providerFetch(
             'muapi-agent',
             fetchImpl,

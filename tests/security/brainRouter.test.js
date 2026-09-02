@@ -255,6 +255,32 @@ test('a poll timeout equal to the interval still requests the result once', asyn
     assert.equal(result.text, 'Agent plan');
 });
 
+test('a stalled MuAPI Agent poll with timeout equal to the interval still respects the timeout', async () => {
+    const startedAt = Date.now();
+    const result = await reasonWithBrain(request, {
+        env: {
+            ...baseEnv,
+            BRAIN_PROVIDER: 'muapi-agent',
+            BRAIN_FALLBACK_ORDER: 'muapi-agent,gemini',
+            MUAPI_AGENT_POLL_INTERVAL_MS: '300',
+            MUAPI_AGENT_POLL_TIMEOUT_MS: '300',
+        },
+        fetchImpl: async (url, options) => {
+            if (url.includes('generativelanguage')) return geminiSuccess('Gemini fallback');
+            if (url.endsWith('/chat')) {
+                return new Response(JSON.stringify({ request_id: 'req_stalled' }), { status: 200 });
+            }
+            return new Promise((resolve, reject) => {
+                options.signal.addEventListener('abort', () => reject(options.signal.reason));
+                setTimeout(() => resolve(new Response(JSON.stringify({ is_complete: true, messages: [] }))), 5_000);
+            });
+        },
+    });
+
+    assert.equal(result.provider, 'gemini');
+    assert.equal(Date.now() - startedAt < 1_500, true);
+});
+
 test('a failed MuAPI Agent prediction never falls back or leaks the agent key', async () => {
     await assert.rejects(
         reasonWithBrain(request, {
