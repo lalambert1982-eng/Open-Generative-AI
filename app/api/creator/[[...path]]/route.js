@@ -1,6 +1,5 @@
 import {
     creatorNotFound,
-    handleBrainAssistant,
     handleCreatorProviders,
     handleElevenLabsSpeech,
     handleHeyGenStatus,
@@ -9,7 +8,9 @@ import {
     handleMuapiStatus,
     handleMuapiVideo,
 } from '../../../../src/lib/creatorProviderGateway.js';
+import { handleCreatorAgentRoute } from '../../../../src/lib/creatorAgentGateway.js';
 import { handleCreatorProjectRoute } from '../../../../src/lib/creatorProjectRoutes.js';
+import { handleSelenaAgentAssistant } from '../../../../src/lib/selenaAgentAssistant.js';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,13 +23,19 @@ async function dispatch(request, context, method) {
             method,
         });
     }
+    if (path[0] === 'agents') {
+        return handleCreatorAgentRoute(request, {
+            path: path.slice(1),
+            method,
+        });
+    }
     const route = `${method}:${path.join('/')}`;
 
     switch (route) {
         case 'GET:providers':
             return handleCreatorProviders(request);
         case 'POST:assistant':
-            return handleBrainAssistant(request);
+            return handleSelenaAgentAssistant(request);
         case 'POST:image':
             return handleMuapiImage(request);
         case 'POST:video':
