@@ -1,7 +1,10 @@
+import { CREATOR_AGENT_KEYS } from './creatorAgentRegistry.js';
+
 const ACTION_ID_PATTERN = /^[a-z][a-z0-9.-]{1,80}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,139}$/;
 const ASPECT_RATIOS = new Set(['16:9', '9:16', '1:1', '4:5']);
 const PLATFORMS = new Set(['instagram', 'tiktok', 'youtube']);
+const CREATOR_AGENT_IDS = new Set(CREATOR_AGENT_KEYS);
 
 export const SELENA_ACTION_REGISTRY = Object.freeze({
     'image.generate': Object.freeze({
@@ -59,6 +62,30 @@ export const SELENA_ACTION_REGISTRY = Object.freeze({
         available: true,
         sideEffect: null,
         fields: Object.freeze(['workflowId']),
+    }),
+    'agent.open': Object.freeze({
+        label: 'Open Agent Blueprints',
+        destination: '/studio/advanced/agents',
+        requiresApproval: false,
+        available: true,
+        sideEffect: null,
+        fields: Object.freeze(['agentId']),
+    }),
+    'agent.delegate': Object.freeze({
+        label: 'Delegate to Creator Agent',
+        destination: '/studio/selena',
+        requiresApproval: false,
+        available: true,
+        sideEffect: 'Delegation sends bounded Project context to one approved Creator Agent and returns the result to Selena.',
+        fields: Object.freeze(['agentId', 'task', 'assetId']),
+    }),
+    'agent.continue': Object.freeze({
+        label: 'Continue Creator Agent',
+        destination: '/studio/selena',
+        requiresApproval: false,
+        available: true,
+        sideEffect: 'Continuation sends a bounded follow-up to the same approved Creator Agent conversation.',
+        fields: Object.freeze(['agentId', 'task', 'assetId', 'conversationId']),
     }),
     'asset.open': Object.freeze({
         label: 'Open Asset',
@@ -153,6 +180,15 @@ function normalizeParameters(actionId, value) {
         if (field === 'prompt') {
             const prompt = text(source.prompt, 4000);
             if (prompt) parameters.prompt = prompt;
+        } else if (field === 'task') {
+            const task = text(source.task, 8000);
+            if (task) parameters.task = task;
+        } else if (field === 'agentId') {
+            const agentId = text(source.agentId, 60).toLowerCase();
+            if (CREATOR_AGENT_IDS.has(agentId)) parameters.agentId = agentId;
+        } else if (field === 'conversationId') {
+            const id = opaqueId(source.conversationId);
+            if (id) parameters.conversationId = id;
         } else if (field === 'aspectRatio') {
             if (ASPECT_RATIOS.has(source.aspectRatio)) parameters.aspectRatio = source.aspectRatio;
         } else if (field === 'duration') {
@@ -200,6 +236,7 @@ export function boundedSelenaContext({
         project: project ? {
             id: opaqueId(project.id),
             name: text(project.name, 100) || 'Untitled Project',
+            objective: text(project.objective, 1000) || null,
             assetCount: assets.length,
             storyboard: {
                 sceneCount: scenes.length,
@@ -224,8 +261,12 @@ export function buildSelenaBrainRequest(input = {}, context = {}) {
         context,
         instructions: [
             'Return a bounded Creator Studio plan. Only suggest actions from the supplied schema.',
+            'Use direct Creator actions for single obvious operations such as opening Graphic Studio or preparing one image/video generation.',
+            'For specialized synthesis or strategy, prefer agent.delegate with one approved internal Creator Agent ID: research-trends for research/trends; content-writer for scripts/copy; design-director for visual strategy; video-director for video/storyboard planning; social-producer for social packaging; marketing-strategist for campaigns/marketing; project-producer for Project readiness; creative-director for overall creative direction.',
+            'Selena remains the sole coordinator. Never ask one Creator Agent to spawn, invoke, or delegate to another Agent.',
+            'Never invent an external Agent ID or Agent slug. Only the internal Creator Agent IDs listed above are valid model-visible identifiers.',
             'Never claim that generation, publishing, scheduling, deletion, spending, or another external action occurred.',
-            'Prepare parameters for the user to review. Do not invent provider keys, URLs, asset IDs, account IDs, or workflow IDs.',
+            'Prepare parameters for the user to review. Do not invent provider keys, URLs, asset IDs, account IDs, workflow IDs, or conversation IDs.',
             'Normal users should see AI Engine: Auto rather than provider or model selection.',
         ].join(' '),
         desiredOutput: { type: 'structured', schema: SELENA_PLAN_SCHEMA },
@@ -245,12 +286,16 @@ export function normalizeSelenaPlan(result = {}) {
         const action = text(candidate?.action, 80);
         if (!ACTION_ID_PATTERN.test(action) || !SELENA_ACTION_REGISTRY[action]) continue;
         const definition = SELENA_ACTION_REGISTRY[action];
+        const parameters = normalizeParameters(action, candidate?.parameters);
+        if (action.startsWith('agent.') && !parameters.agentId) continue;
+        if (['agent.delegate', 'agent.continue'].includes(action) && !parameters.task) continue;
+        if (action === 'agent.continue' && !parameters.conversationId) continue;
         suggestedActions.push({
             id: `${action}-${suggestedActions.length + 1}`,
             action,
             label: text(candidate?.label, 120) || definition.label,
             rationale: text(candidate?.rationale, 500),
-            parameters: normalizeParameters(action, candidate?.parameters),
+            parameters,
             destination: definition.destination,
             available: definition.available,
             requiresApproval: definition.requiresApproval,
