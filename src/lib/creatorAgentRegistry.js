@@ -7,6 +7,7 @@ function agentDefinition({
     description,
     capabilities,
     systemPrompt,
+    enabled = true,
 }) {
     return Object.freeze({
         id,
@@ -14,7 +15,7 @@ function agentDefinition({
         role,
         description,
         capabilities: Object.freeze([...capabilities]),
-        enabled: true,
+        enabled: enabled === true,
         allowedActions: Object.freeze(['respond']),
         systemPrompt: [
             systemPrompt,
@@ -129,9 +130,12 @@ export function normalizeCreatorAgentKey(value) {
     return AGENT_KEY_PATTERN.test(key) ? key : '';
 }
 
-export function getCreatorAgentDefinition(value, { allowDisabled = false } = {}) {
+export function getCreatorAgentDefinition(value, {
+    allowDisabled = false,
+    registry = CREATOR_AGENT_REGISTRY,
+} = {}) {
     const key = normalizeCreatorAgentKey(value);
-    const definition = key ? CREATOR_AGENT_REGISTRY[key] : null;
+    const definition = key ? registry?.[key] : null;
     if (!definition) {
         throw new CreatorAgentRegistryError('unknown_agent', 'The requested Creator Agent is not registered.', 404);
     }
@@ -141,9 +145,9 @@ export function getCreatorAgentDefinition(value, { allowDisabled = false } = {})
     return definition;
 }
 
-export function listCreatorAgentDefinitions() {
-    return CREATOR_AGENT_KEYS.map((key) => {
-        const definition = CREATOR_AGENT_REGISTRY[key];
+export function listCreatorAgentDefinitions({ registry = CREATOR_AGENT_REGISTRY } = {}) {
+    return Object.keys(registry || {}).map((key) => {
+        const definition = registry[key];
         return {
             id: definition.id,
             name: definition.name,
