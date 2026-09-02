@@ -8,7 +8,6 @@ import {
 } from './creatorAgentRegistry.js';
 import { authorizeCreatorRequest, creatorJson } from './creatorProviderGateway.js';
 import { getCreatorProject } from './creatorProjectStore.js';
-import { muapiConfiguration } from './muapiCreatorProvider.js';
 import { fetchMuapi } from './muapiProxy.js';
 
 const MAX_REQUEST_BYTES = 32 * 1024;
@@ -18,6 +17,13 @@ const MAX_AGENT_RESPONSE_CHARACTERS = 12_000;
 const MAX_POLL_ATTEMPTS = 25;
 const POLL_INTERVAL_MS = 1_000;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
+const ALLOWED_CLIENT_FIELDS = new Set([
+    'agentId',
+    'task',
+    'projectId',
+    'assetId',
+    'conversationId',
+]);
 const FORBIDDEN_CLIENT_FIELDS = new Set([
     'apiKey',
     'api_key',
@@ -45,6 +51,12 @@ function normalized(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
 
+function configuredApiKey(value) {
+    const key = normalized(value);
+    if (!/^[\x21-\x7E]{8,4096}$/.test(key) || /[\r\n]/.test(key)) return false;
+    return !/^(?:<.*>|change-?me|placeholder|your[-_]?api[-_]?key)$/i.test(key);
+}
+
 function boundedText(value, name, maximum, { optional = false } = {}) {
     if (value == null && optional) return '';
     if (typeof value !== 'string') throw new CreatorAgentError('invalid_request', `${name} must be text.`);
@@ -61,13 +73,20 @@ function opaqueId(value, name, { optional = false } = {}) {
     return id;
 }
 
-function assertNoForbiddenClientFields(value) {
+function assertAllowedClientFields(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return;
     for (const key of Object.keys(value)) {
         if (FORBIDDEN_CLIENT_FIELDS.has(key)) {
             throw new CreatorAgentError(
                 'external_agent_id_forbidden',
                 'External Agent identifiers and provider credentials are server-owned and cannot be supplied by the client.',
+                400,
+            );
+        }
+        if (!ALLOWED_CLIENT_FIELDS.has(key)) {
+            throw new CreatorAgentError(
+                'unknown_request_field',
+                `Unsupported Creator Agent request field: ${key}.`,
                 400,
             );
         }
@@ -84,16 +103,31 @@ function safeProviderMessage(value) {
 }
 
 function agentConfiguration(env) {
-    const configuration = muapiConfiguration(env);
-    if (!configuration.configured) {
+    const keyMode = normalized(env.MUAPI_KEY_MODE).toLowerCase();
+    const missing = [];
+    if (!['sandbox', 'production'].includes(keyMode)) {
+        missing.push('MUAPI_KEY_MODE');
+    }
+    const apiKeyVariable = keyMode === 'production'
+        ? 'MUAPI_PRODUCTION_API_KEY'
+        : keyMode === 'sandbox'
+            ? 'MUAPI_API_KEY'
+            : null;
+    const apiKey = apiKeyVariable ? normalized(env[apiKeyVariable]) : '';
+    if (apiKeyVariable && !configuredApiKey(apiKey)) missing.push(apiKeyVariable);
+    if (missing.length > 0) {
         throw new CreatorAgentError(
             'agent_provider_unconfigured',
-            'Creator Agent delegation requires the safe active MuAPI configuration.',
+            'Creator Agent delegation requires an active server-side MuAPI Agent credential.',
             503,
-            { missing: configuration.missing },
+            { missing },
         );
     }
-    return configuration;
+    return {
+        configured: true,
+        apiKey,
+        keyMode,
+    };
 }
 
 async function readJsonResponse(response) {
@@ -408,7 +442,7 @@ export async function delegateCreatorAgent(user, input = {}, {
     auditBlobStore,
     pollOptions = {},
 } = {}) {
-    assertNoForbiddenClientFields(input);
+    assertAllowedClientFields(input);
     const definition = getCreatorAgentDefinition(input.agentId);
     const task = boundedText(input.task, 'Agent task', MAX_TASK_CHARACTERS);
     const projectId = opaqueId(input.projectId, 'Project ID');
@@ -491,7 +525,7 @@ async function parseJson(request, env) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         throw new CreatorAgentError('invalid_json', 'Creator Agent request must be a JSON object.');
     }
-    assertNoForbiddenClientFields(value);
+    assertAllowedClientFields(value);
     const safety = evaluateJsonSafety(raw || '{}', { env });
     if (!safety.allowed) {
         throw new CreatorAgentError('content_safety', 'Creator Agent request was blocked by the content safety policy.', 422);
