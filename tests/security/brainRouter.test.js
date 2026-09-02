@@ -218,6 +218,26 @@ test('a MuAPI Agent timeout falls back to Gemini within the bounded poll window'
     assert.equal(calls.filter((url) => url.includes('/predictions/')).length <= 6, true);
 });
 
+test('a stalled MuAPI Agent poll is aborted at the deadline and falls back', async () => {
+    const startedAt = Date.now();
+    const result = await reasonWithBrain(request, {
+        env: { ...baseEnv, BRAIN_PROVIDER: 'muapi-agent', BRAIN_FALLBACK_ORDER: 'muapi-agent,gemini' },
+        fetchImpl: async (url, options) => {
+            if (url.includes('generativelanguage')) return geminiSuccess('Gemini fallback');
+            if (url.endsWith('/chat')) {
+                return new Response(JSON.stringify({ request_id: 'req_stalled' }), { status: 200 });
+            }
+            return new Promise((resolve, reject) => {
+                options.signal.addEventListener('abort', () => reject(options.signal.reason));
+                setTimeout(() => resolve(new Response(JSON.stringify({ is_complete: true, messages: [] }))), 5_000);
+            });
+        },
+    });
+
+    assert.equal(result.provider, 'gemini');
+    assert.equal(Date.now() - startedAt < 2_000, true);
+});
+
 test('a failed MuAPI Agent prediction never falls back or leaks the agent key', async () => {
     await assert.rejects(
         reasonWithBrain(request, {

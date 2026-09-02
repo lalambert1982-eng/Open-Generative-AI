@@ -92,16 +92,17 @@ OPENROUTER_API_KEY=
 Add these seven values as normal non-secret Preview configuration:
 
 ```dotenv
-BRAIN_PROVIDER=gemini
+BRAIN_PROVIDER=muapi-agent
+MUAPI_AGENT_SLUG=selena
 GEMINI_MODEL=gemini-3.7-flash
 GROQ_MODEL=openai/gpt-oss-120b
 OPENROUTER_MODEL=openrouter/free
-BRAIN_FALLBACK_ORDER=gemini,groq,openrouter
+BRAIN_FALLBACK_ORDER=muapi-agent,gemini,groq,openrouter
 BRAIN_ENABLE_AUTOMATIC_FALLBACK=true
-BRAIN_MAX_ATTEMPTS=3
+BRAIN_MAX_ATTEMPTS=4
 ```
 
-Do not copy the three Preview API-key values into Production automatically. After mocked/local validation and an explicitly approved Preview test, Production needs the same variable **names** in its own environment: `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `BRAIN_PROVIDER`, `GEMINI_MODEL`, `GROQ_MODEL`, `OPENROUTER_MODEL`, `BRAIN_FALLBACK_ORDER`, `BRAIN_ENABLE_AUTOMATIC_FALLBACK`, and `BRAIN_MAX_ATTEMPTS`. Production configuration and deployment require separate approval.
+Do not copy the three Preview API-key values into Production automatically. After mocked/local validation and an explicitly approved Preview test, Production needs the same variable **names** in its own environment: the MuAPI key, `MUAPI_AGENT_SLUG`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `BRAIN_PROVIDER`, `GEMINI_MODEL`, `GROQ_MODEL`, `OPENROUTER_MODEL`, `BRAIN_FALLBACK_ORDER`, `BRAIN_ENABLE_AUTOMATIC_FALLBACK`, and `BRAIN_MAX_ATTEMPTS`. Production configuration and deployment require separate approval.
 
 ## Configure Greg's HeyGen Digital Twin
 
@@ -205,8 +206,8 @@ The defaults are listed in `.env.example`:
 - `CREATOR_SESSION_TTL_SECONDS=28800` limits a signed Studio session to eight hours. The code caps sessions at 24 hours.
 - `CREATOR_STUDIO_RATE_LIMIT=5` limits each generation action per minute for the signed-in GitHub identity.
 - `CREATOR_STUDIO_STATUS_RATE_LIMIT=120` permits provider task polling without relaxing generation limits.
-- `BRAIN_PROVIDER=gemini` selects the default reasoning provider without changing any agent.
-- `BRAIN_FALLBACK_ORDER=gemini,groq,openrouter` and `BRAIN_MAX_ATTEMPTS=3` bound the initial free/developer routing path.
+- `BRAIN_PROVIDER=muapi-agent` routes Selena through the Agent Blueprint named by `MUAPI_AGENT_SLUG`.
+- `BRAIN_FALLBACK_ORDER=muapi-agent,gemini,groq,openrouter` and `BRAIN_MAX_ATTEMPTS=4` bound the routing path so every listed fallback can be reached.
 - `BRAIN_ENABLE_AUTOMATIC_FALLBACK=true` enables only the safe fallback cases described above.
 - `BRAIN_PRIVATE_ELIGIBLE_PROVIDERS` and `BRAIN_CLIENT_CONFIDENTIAL_ELIGIBLE_PROVIDERS` are empty by default so sensitive work fails closed.
 - `CONTENT_SAFETY_MODE=enforce` blocks the built-in high-risk content classes before any paid provider call. `audit` and `off` remain explicit operator choices.

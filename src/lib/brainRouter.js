@@ -124,7 +124,7 @@ function strictBoolean(value, fallback) {
 }
 
 function strictAttempts(value) {
-    if (value == null || value === '') return { value: 3 };
+    if (value == null || value === '') return { value: BRAIN_PROVIDER_IDS.length };
     const parsed = Number(value);
     if (!Number.isInteger(parsed) || parsed < 1 || parsed > BRAIN_PROVIDER_IDS.length) {
         return { error: `BRAIN_MAX_ATTEMPTS must be an integer from 1 to ${BRAIN_PROVIDER_IDS.length}.` };
@@ -499,13 +499,13 @@ async function readJsonResponse(response, provider) {
     return value;
 }
 
-async function providerFetch(provider, fetchImpl, url, options) {
+async function providerFetch(provider, fetchImpl, url, options, timeoutMs = DEFAULT_TIMEOUT_MS) {
     let response;
     try {
         response = await fetchImpl(url, {
             ...options,
             redirect: 'error',
-            signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+            signal: AbortSignal.timeout(Math.max(1, timeoutMs)),
         });
     } catch (error) {
         const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';
@@ -748,13 +748,14 @@ async function callMuapiAgent(request, { env, fetchImpl, model, key }) {
     const timeout = boundedInteger(env.MUAPI_AGENT_POLL_TIMEOUT_MS, MUAPI_AGENT_DEFAULT_POLL_TIMEOUT_MS, interval, 120_000);
     const deadline = Date.now() + timeout;
     let value = null;
-    while (Date.now() < deadline) {
+    while (Date.now() + interval < deadline) {
         await new Promise((resolve) => setTimeout(resolve, interval));
         value = await providerFetch(
             'muapi-agent',
             fetchImpl,
             `${MUAPI_API_BASE}/api/v1/predictions/${encodeURIComponent(requestId)}/result`,
             { method: 'GET', headers },
+            Math.min(DEFAULT_TIMEOUT_MS, deadline - Date.now()),
         );
         if (value?.is_complete === true) break;
         if (/^(failed|error|cancel)/i.test(String(value?.status || ''))) {
