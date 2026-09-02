@@ -72,6 +72,19 @@ function jsonResponse(value, status = 200) {
     });
 }
 
+function decodedRequestBody(options = {}) {
+    const body = options.body;
+    if (body instanceof ArrayBuffer) return new TextDecoder().decode(body);
+    if (ArrayBuffer.isView(body)) {
+        return new TextDecoder().decode(body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength));
+    }
+    return typeof body === 'string' ? body : String(body || '');
+}
+
+function parsedRequestBody(options = {}) {
+    return JSON.parse(decodedRequestBody(options));
+}
+
 function slugFor(name) {
     return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
@@ -182,7 +195,7 @@ test('ensureCreatorAgents is idempotent and does not duplicate provisioned agent
         if (href.endsWith('/agents/user/agents')) return jsonResponse(externalAgents);
         if (href.endsWith('/agents') && options.method === 'POST') {
             creates += 1;
-            const body = JSON.parse(options.body);
+            const body = parsedRequestBody(options);
             const created = { agent_id: slugFor(body.name), name: body.name, description: body.description };
             externalAgents.push(created);
             return jsonResponse(created, 201);
@@ -265,8 +278,8 @@ test('Creator Agent delegation resolves external Agent ID server-side and never 
     const chat = capture.find((entry) => entry.url.includes('/agents/by-slug/'));
     assert.ok(chat);
     assert.equal(chat.url.includes(EXTERNAL_AGENT_ID), true);
-    assert.equal(chat.options.headers['x-api-key'], PROVIDER_KEY);
-    assert.equal(String(chat.options.body).includes(PROVIDER_KEY), false);
+    assert.equal(new Headers(chat.options.headers).get('x-api-key'), PROVIDER_KEY);
+    assert.equal(decodedRequestBody(chat.options).includes(PROVIDER_KEY), false);
 });
 
 test('bounded Agent context is isolated to the selected Project', async () => {
@@ -286,7 +299,7 @@ test('bounded Agent context is isolated to the selected Project', async () => {
     });
 
     const chat = capture.find((entry) => entry.url.includes('/chat'));
-    const submitted = JSON.parse(chat.options.body);
+    const submitted = parsedRequestBody(chat.options);
     assert.equal(submitted.message.includes('Project Beta'), true);
     assert.equal(submitted.message.includes('Beta image'), true);
     assert.equal(submitted.message.includes('Project Alpha'), false);
