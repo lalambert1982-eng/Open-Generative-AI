@@ -505,7 +505,7 @@ export default function StandaloneShell() {
       case 'edit-studio': return <ClippingStudio {...legacyShared} />;
       case 'influencer': return <AiInfluencerStudio {...legacyShared} />;
       case 'marketing': return <MarketingStudio {...legacyShared} />;
-      case 'workflows': return <WorkflowStudio {...legacyShared} isHeaderVisible={isHeaderVisible} onToggleHeader={setIsHeaderVisible} />;
+      case 'workflows': return <WorkflowStudio {...legacyShared} project={currentProject} onProjectRefresh={(projectId) => openProject(projectId || currentProject?.id)} isHeaderVisible={isHeaderVisible} onToggleHeader={setIsHeaderVisible} />;
       case 'agent-blueprints': return <AgentStudio apiKey={apiKey} basePath="/studio/advanced/agents" />;
       case 'marketplace': return <AppsStudio apiKey={apiKey} />;
       case 'provider-settings': return <LegacyProviderSettings apiKey={apiKey} onSave={saveKey} onClear={clearKey} />;

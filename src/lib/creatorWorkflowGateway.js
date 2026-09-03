@@ -188,7 +188,7 @@ function collectOutputUrls(value, env, output = [], depth = 0) {
         return output;
     }
     if (typeof value === 'object') {
-        const preferred = ['url', 'output_url', 'video_url', 'image_url', 'audio_url', 'outputs', 'output', 'data', 'results'];
+        const preferred = ['url', 'output_url', 'video_url', 'image_url', 'audio_url', 'outputs', 'output', 'value', 'data', 'results'];
         for (const key of preferred) {
             if (Object.hasOwn(value, key)) collectOutputUrls(value[key], env, output, depth + 1);
         }
@@ -240,7 +240,7 @@ async function registerOutputs(user, run, value, {
             provider: {
                 provider: 'muapi',
                 model: `workflow:${run.workflowId}`,
-                requestId: run.providerRunId || undefined,
+                requestId: run.id,
                 keyMode: normalized(env.MUAPI_KEY_MODE).toLowerCase(),
             },
         }, {
