@@ -1009,7 +1009,25 @@ export default function WorkflowStudio({
             </>
           ) : (
             <div className="flex-1 relative bg-[#050505]">
-              {nodeSchemas && workflowDef ? (
+              {project?.id ? (
+                <div className="absolute inset-0 flex items-center justify-center p-8">
+                  <div className="w-full max-w-xl rounded-2xl border border-amber-300/20 bg-amber-300/[0.05] p-7 text-center">
+                    <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-300/10 text-amber-200">
+                      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 9v4m0 4h.01M10.3 3.3L2.6 17a2 2 0 001.7 3h15.4a2 2 0 001.7-3L13.7 3.3a2 2 0 00-3.4 0z"/></svg>
+                    </div>
+                    <h3 className="mt-4 text-lg font-bold text-white">Project-safe builder execution is being hardened</h3>
+                    <p className="mt-2 text-sm leading-6 text-white/45">
+                      The upstream visual builder can execute individual nodes through its legacy BYOK route. That execution surface is disabled inside Creator Projects so it cannot bypass Project ownership or approval gates.
+                    </p>
+                    <p className="mt-3 text-xs leading-5 text-white/30">
+                      Use Playground to prepare and approve the complete Workflow through the secure Creator execution boundary. The standalone legacy Workflow builder remains unchanged outside Project mode.
+                    </p>
+                    <button type="button" onClick={() => setActiveSubTab("playground")} className="mt-6 rounded-xl bg-amber-200 px-5 py-3 text-[10px] font-black uppercase tracking-[0.18em] text-black hover:bg-white transition-colors">
+                      Return to secure Playground
+                    </button>
+                  </div>
+                </div>
+              ) : nodeSchemas && workflowDef ? (
                 <WorkflowUI
                   apiKey={apiKey}
                   workflowId={selectedWorkflow?.id}
