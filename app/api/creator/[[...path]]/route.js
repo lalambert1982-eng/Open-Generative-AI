@@ -10,6 +10,7 @@ import {
     handleMuapiVideo,
 } from '../../../../src/lib/creatorProviderGateway.js';
 import { handleCreatorProjectRoute } from '../../../../src/lib/creatorProjectRoutes.js';
+import { handleCreatorWorkflowRoute } from '../../../../src/lib/creatorWorkflowGateway.js';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -18,6 +19,12 @@ async function dispatch(request, context, method) {
     const { path = [] } = await context.params;
     if (path[0] === 'projects') {
         return handleCreatorProjectRoute(request, {
+            path: path.slice(1),
+            method,
+        });
+    }
+    if (path[0] === 'workflows') {
+        return handleCreatorWorkflowRoute(request, {
             path: path.slice(1),
             method,
         });
