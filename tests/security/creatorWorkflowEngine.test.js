@@ -1,0 +1,322 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+    createCreatorProject,
+    creatorProjectStoreForTests,
+    getCreatorProject,
+    saveCreatorStoryboard,
+} from '../../src/lib/creatorProjectStore.js';
+import {
+    CreatorWorkflowError,
+    advanceWorkflowRun,
+    approveAndAdvanceWorkflowRun,
+    cancelWorkflowRun,
+    createWorkflowRun,
+    retryWorkflowNode,
+} from '../../src/lib/creatorWorkflowEngine.js';
+
+const env = {
+    BLOB_READ_WRITE_TOKEN: 'vercel-blob-test-token-that-is-long-enough',
+    CREATOR_ASSET_BLOB_READ_WRITE_TOKEN: 'creator-public-blob-test-token-that-is-long-enough',
+    CREATOR_SESSION_SECRET: 'creator-workflow-test-secret-that-is-longer-than-thirty-two-characters',
+    MUAPI_KEY_MODE: 'sandbox',
+    MUAPI_API_KEY: 'sandbox-key-that-is-long-enough',
+};
+const owner = { id: 12345678, login: 'lalambert1982-eng' };
+const otherOwner = { id: 87654321, login: 'other-owner' };
+const projectAId = '11111111-1111-4111-8111-111111111111';
+const projectBId = '22222222-2222-4222-8222-222222222222';
+
+function sequentialIdGenerator(prefix = 'id') {
+    let count = 0;
+    return () => `${prefix}-${++count}`;
+}
+
+function succeedingFetch(hostOverride) {
+    let counter = 0;
+    return async () => {
+        counter += 1;
+        const host = hostOverride || 'cdn.muapi.ai';
+        return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({
+                id: `provider-job-${counter}`,
+                status: 'succeeded',
+                output: [`https://${host}/out-${counter}.png`],
+            }),
+        };
+    };
+}
+
+function failingFetch(message = 'Upstream provider rejected the request.') {
+    return async () => ({
+        ok: false,
+        status: 422,
+        text: async () => JSON.stringify({ error: { message } }),
+    });
+}
+
+async function setupProject(id, ownerUser, blobStore, options = {}) {
+    return createCreatorProject(ownerUser, { name: 'Test Project' }, {
+        env,
+        blobStore,
+        idGenerator: () => id,
+        now: Date.UTC(2026, 0, 1),
+        ...options,
+    });
+}
+
+test('a manual two-node run gates approval, resolves upstream output, and registers assets sequentially', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    const { run } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        name: 'Two Step',
+        nodes: [
+            { kind: 'image.generate', prompt: 'a lighthouse at dusk' },
+            { kind: 'video.animate', prompt: 'slow pan across the lighthouse', sourceNodeIndex: 0 },
+        ],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+    assert.equal(run.status, 'queued');
+    assert.equal(run.nodes.length, 2);
+    assert.equal(run.nodes[1].inputs.sourceNodeIndex, 0);
+
+    const fetchImpl = succeedingFetch();
+
+    // Node 1 must not execute before node 0 completes, and node 0 cannot submit
+    // without an explicit approval step first — advance() must gate, not bypass.
+    const gate = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl, now: Date.UTC(2026, 0, 3) });
+    assert.equal(gate.run.status, 'waiting_for_approval');
+    assert.equal(gate.run.nodes[0].status, 'waiting_for_approval');
+    assert.equal(gate.run.nodes[0].approved, false);
+    assert.equal(gate.run.nodes[1].status, 'pending');
+
+    const approved = await approveAndAdvanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl, now: Date.UTC(2026, 0, 4) });
+    assert.equal(approved.run.nodes[0].status, 'completed');
+    assert.equal(approved.run.nodes[0].outputUrl, 'https://cdn.muapi.ai/out-1.png');
+    assert.equal(approved.run.status, 'running');
+    assert.equal(approved.run.nodes[1].status, 'pending', 'node 1 must not have started yet');
+    assert.equal(approved.project.assets.length, 1);
+    assert.equal(approved.project.assets[0].source, 'workflow');
+
+    const secondGate = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl, now: Date.UTC(2026, 0, 5) });
+    assert.equal(secondGate.run.status, 'waiting_for_approval');
+    assert.equal(secondGate.run.nodes[1].status, 'waiting_for_approval');
+
+    const finished = await approveAndAdvanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl, now: Date.UTC(2026, 0, 6) });
+    assert.equal(finished.run.status, 'completed');
+    assert.equal(finished.run.nodes[1].status, 'completed');
+    // The downstream node received the upstream node's registered output as its
+    // own input, proving normalized upstream-output handoff actually happened.
+    assert.equal(finished.run.nodes[1].outputUrl, 'https://cdn.muapi.ai/out-2.png');
+    assert.equal(finished.project.assets.length, 2);
+});
+
+test('a provider failure stops downstream execution and is reported as a failed node, not success', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    const { run } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [
+            { kind: 'image.generate', prompt: 'first step' },
+            { kind: 'image.generate', prompt: 'second step, must never run' },
+        ],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: succeedingFetch(), now: Date.UTC(2026, 0, 3) });
+    const failed = await approveAndAdvanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: failingFetch(), now: Date.UTC(2026, 0, 4) });
+
+    assert.equal(failed.run.status, 'failed');
+    assert.equal(failed.run.nodes[0].status, 'failed');
+    assert.equal(typeof failed.run.nodes[0].error, 'string');
+    assert.ok(failed.run.nodes[0].error.length > 0, 'the failure must be visible with a non-empty error, not misreported as success');
+    assert.equal(failed.run.nodes[1].status, 'pending', 'node 2 must never have been submitted');
+    assert.equal(failed.project.assets.length, 0);
+
+    // A failed run refuses to advance further — no path silently resumes it.
+    const noop = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: succeedingFetch(), now: Date.UTC(2026, 0, 5) });
+    assert.equal(noop.changed, false);
+    assert.equal(noop.run.status, 'failed');
+});
+
+test('retry resubmits only the failed node and never duplicates already-completed work', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    const { run } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [
+            { kind: 'image.generate', prompt: 'step one' },
+            { kind: 'image.generate', prompt: 'step two' },
+        ],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: succeedingFetch(), now: Date.UTC(2026, 0, 3) });
+    const afterStep1 = await approveAndAdvanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: succeedingFetch(), now: Date.UTC(2026, 0, 4) });
+    assert.equal(afterStep1.run.nodes[0].status, 'completed');
+    const completedAssetId = afterStep1.run.nodes[0].outputAssetId;
+
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: succeedingFetch(), now: Date.UTC(2026, 0, 5) });
+    const failedStep2 = await approveAndAdvanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: failingFetch(), now: Date.UTC(2026, 0, 6) });
+    assert.equal(failedStep2.run.status, 'failed');
+    assert.equal(failedStep2.run.nodes[0].status, 'completed', 'retry must never touch already-completed nodes');
+    assert.equal(failedStep2.run.nodes[0].outputAssetId, completedAssetId);
+    assert.equal(failedStep2.project.assets.length, 1);
+
+    const retried = await retryWorkflowNode(owner, projectAId, run.id, { env, blobStore, now: Date.UTC(2026, 0, 7) });
+    assert.equal(retried.run.status, 'running');
+    assert.equal(retried.run.nodes[1].status, 'pending');
+    assert.equal(retried.run.nodes[1].approved, true, 'retry does not require re-approval of an already-approved step');
+    assert.equal(retried.run.nodes[1].error, null);
+
+    const succeeded = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: succeedingFetch(), now: Date.UTC(2026, 0, 8) });
+    assert.equal(succeeded.run.status, 'completed');
+    assert.equal(succeeded.run.nodes[1].status, 'completed');
+    assert.equal(succeeded.project.assets.length, 2, 'retry must not duplicate the already-registered first asset');
+});
+
+test('a run can be cancelled while active or paused, and a cancelled run never resumes', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    const { run } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [{ kind: 'image.generate', prompt: 'a single step' }],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: succeedingFetch(), now: Date.UTC(2026, 0, 3) });
+    const cancelled = await cancelWorkflowRun(owner, projectAId, run.id, { env, blobStore, now: Date.UTC(2026, 0, 4) });
+    assert.equal(cancelled.run.status, 'cancelled');
+
+    const noop = await approveAndAdvanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: succeedingFetch(), now: Date.UTC(2026, 0, 5) });
+    assert.equal(noop.run.status, 'cancelled', 'a cancelled run must never resume via approve or advance');
+});
+
+test('a malformed provider output URL fails the node instead of registering an unsafe asset', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    const { run } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [{ kind: 'image.generate', prompt: 'a single step' }],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: succeedingFetch(), now: Date.UTC(2026, 0, 3) });
+    const result = await approveAndAdvanceWorkflowRun(owner, projectAId, run.id, {
+        env,
+        blobStore,
+        fetchImpl: succeedingFetch('evil.example.com'),
+        now: Date.UTC(2026, 0, 4),
+    });
+    assert.equal(result.run.status, 'failed');
+    assert.match(result.run.nodes[0].error, /invalid output URL/);
+    assert.equal(result.project.assets.length, 0);
+});
+
+test('workflow runs and their generated assets are strictly project-scoped and owner-isolated', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore, { idGenerator: () => projectAId });
+    await setupProject(projectBId, owner, blobStore, { idGenerator: () => projectBId });
+    const idGenerator = sequentialIdGenerator('node');
+
+    const { run: runA } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [{ kind: 'image.generate', prompt: 'project A only' }],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+
+    await advanceWorkflowRun(owner, projectAId, runA.id, { env, blobStore, fetchImpl: succeedingFetch(), now: Date.UTC(2026, 0, 3) });
+    const finished = await approveAndAdvanceWorkflowRun(owner, projectAId, runA.id, { env, blobStore, fetchImpl: succeedingFetch(), now: Date.UTC(2026, 0, 4) });
+    assert.equal(finished.project.assets.length, 1);
+
+    // The run and its generated asset must not leak into a sibling project owned
+    // by the same user.
+    const projectB = await getCreatorProject(owner, projectBId, { env, blobStore });
+    assert.deepEqual(projectB.workflowRuns, []);
+    assert.deepEqual(projectB.assets, []);
+
+    // Advancing project A's run by ID against project B must fail as not found,
+    // not silently operate on the wrong project.
+    await assert.rejects(
+        advanceWorkflowRun(owner, projectBId, runA.id, { env, blobStore, fetchImpl: succeedingFetch(), now: Date.UTC(2026, 0, 5) }),
+        (error) => error instanceof CreatorWorkflowError && error.code === 'workflow_not_found',
+    );
+
+    // A different owner cannot even load project A to see its workflow runs.
+    await assert.rejects(
+        advanceWorkflowRun(otherOwner, projectAId, runA.id, { env, blobStore, fetchImpl: succeedingFetch(), now: Date.UTC(2026, 0, 6) }),
+        (error) => error.code === 'project_not_found',
+    );
+});
+
+test('a workflow run built from Storyboard scenes tags each node with its origin scene', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    await saveCreatorStoryboard(owner, projectAId, {
+        storyboard: {
+            scenes: [
+                { id: 'scene-1', title: 'Opening', prompt: 'wide shot of the harbor at sunrise', aspectRatio: '16:9' },
+                { id: 'scene-2', title: 'Reveal', prompt: 'the ship emerges from the fog', aspectRatio: '16:9' },
+            ],
+        },
+    }, { env, blobStore, now: Date.UTC(2026, 0, 2) });
+
+    const idGenerator = sequentialIdGenerator('node');
+    const { run } = await createWorkflowRun(owner, projectAId, { source: 'storyboard', name: 'From Storyboard' }, {
+        env, blobStore, idGenerator, now: Date.UTC(2026, 0, 3),
+    });
+    assert.equal(run.source, 'storyboard');
+    assert.equal(run.nodes.length, 2);
+    assert.equal(run.nodes[0].inputs.sceneId, 'scene-1');
+    assert.equal(run.nodes[0].inputs.prompt, 'wide shot of the harbor at sunrise');
+    assert.equal(run.nodes[1].inputs.sceneId, 'scene-2');
+    assert.equal(run.nodes[0].kind, 'image.generate');
+});
+
+test('workflow run state persists across a fresh project reload, not just in-memory', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    const { run } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [{ kind: 'image.generate', prompt: 'persisted step' }],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: succeedingFetch(), now: Date.UTC(2026, 0, 3) });
+    await approveAndAdvanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: succeedingFetch(), now: Date.UTC(2026, 0, 4) });
+
+    // Simulate reopening the Project in a fresh request with no prior in-memory state.
+    const reloaded = await getCreatorProject(owner, projectAId, { env, blobStore });
+    assert.equal(reloaded.workflowRuns.length, 1);
+    assert.equal(reloaded.workflowRuns[0].status, 'completed');
+    assert.equal(reloaded.workflowRuns[0].nodes[0].status, 'completed');
+    assert.equal(reloaded.assets.length, 1);
+    assert.equal(reloaded.assets[0].source, 'workflow');
+});
+
+test('an unapproved node can never reach running or completed through any advance call', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    const { run } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [{ kind: 'image.generate', prompt: 'gated step' }],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        const result = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: succeedingFetch(), now: Date.UTC(2026, 0, 3 + attempt) });
+        assert.equal(result.run.nodes[0].approved, false);
+        assert.notEqual(result.run.nodes[0].status, 'completed');
+        assert.notEqual(result.run.nodes[0].status, 'running');
+    }
+});

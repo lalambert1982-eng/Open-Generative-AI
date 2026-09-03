@@ -9,7 +9,7 @@ import {
   RecastStudio, SocialPublishStudio, VibeMotionStudio, VideoStudio, WorkflowStudio, getUserBalance,
 } from 'studio';
 import {
-  Blocks, Bot, Boxes, ChevronDown, Clapperboard, Film, FolderOpen, Home, Image,
+  Blocks, Bot, Boxes, ChevronDown, Clapperboard, Film, FolderOpen, GitBranch, Home, Image,
   LayoutGrid, Menu, Mic2, Music2, PanelLeftClose, PanelLeftOpen, Send, Settings2, Share2,
   Sparkles, UserRound, WandSparkles, Workflow, X, Zap,
 } from 'lucide-react';
@@ -27,7 +27,7 @@ const NAV_GROUPS = [
   { label: 'Agent', items: ['selena'] },
   { label: 'Tools', items: ['image', 'video', 'audio', 'graphics', 'avatar', 'music', 'video-advanced', 'lipsync', 'motion', 'transform', 'smart-clip'] },
   { label: 'Apps', items: ['generator', 'influencer', 'graphic-studio', 'scene-builder', 'music-video', 'marketing', 'edit-studio'] },
-  { label: '', items: ['workflows', 'projects', 'assets', 'publish'] },
+  { label: '', items: ['workflows', 'workflow-run', 'projects', 'assets', 'publish'] },
   { label: 'Advanced', items: ['agent-blueprints', 'marketplace', 'provider-settings'] },
 ];
 const ICONS = {
@@ -36,7 +36,7 @@ const ICONS = {
   lipsync: Mic2, motion: Zap, transform: Sparkles, 'smart-clip': Clapperboard,
   generator: WandSparkles, influencer: UserRound, 'graphic-studio': LayoutGrid,
   'scene-builder': Boxes, 'music-video': Music2, marketing: Send, 'edit-studio': Clapperboard,
-  workflows: Workflow, projects: FolderOpen, assets: Boxes, publish: Share2, 'agent-blueprints': Blocks,
+  workflows: Workflow, 'workflow-run': GitBranch, projects: FolderOpen, assets: Boxes, publish: Share2, 'agent-blueprints': Blocks,
   marketplace: Boxes, 'provider-settings': Settings2,
 };
 const LEGACY_DESTINATIONS = new Set([
@@ -431,6 +431,10 @@ export default function StandaloneShell() {
       'storyboard.create': '/studio/apps/scene-builder',
       'storyboard.addScene': '/studio/apps/scene-builder',
       'workflow.open': '/studio/workflows',
+      'workflow.create': '/studio/apps/workflow-run',
+      'workflow.configure': '/studio/apps/workflow-run',
+      'workflow.run': '/studio/apps/workflow-run',
+      'workflow.status': '/studio/apps/workflow-run',
       'asset.open': '/studio/assets',
       'asset.delete': '/studio/assets',
       'social.prepare': '/studio/publish',
@@ -467,6 +471,7 @@ export default function StandaloneShell() {
     onConversationChange: saveProjectConversation,
     onStoryboardChange: saveProjectStoryboard,
     onProjectNameChange: (name) => currentProject?.id && renameProject(currentProject.id, name),
+    onProjectChange: applyCurrentProject,
   };
 
   const openAsset = useCallback((asset, target) => {
@@ -506,6 +511,7 @@ export default function StandaloneShell() {
       case 'influencer': return <AiInfluencerStudio {...legacyShared} />;
       case 'marketing': return <MarketingStudio {...legacyShared} />;
       case 'workflows': return <WorkflowStudio {...legacyShared} isHeaderVisible={isHeaderVisible} onToggleHeader={setIsHeaderVisible} />;
+      case 'workflow-run': return <CreatorStudio {...callbacks('workflow-run')} {...creatorProjectProps} initialToolId="workflow" allowedToolIds={['workflow']} workspaceLabel="Workflow" />;
       case 'agent-blueprints': return <AgentStudio apiKey={apiKey} basePath="/studio/advanced/agents" />;
       case 'marketplace': return <AppsStudio apiKey={apiKey} />;
       case 'provider-settings': return <LegacyProviderSettings apiKey={apiKey} onSave={saveKey} onClear={clearKey} />;

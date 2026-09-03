@@ -425,6 +425,7 @@ export async function createCreatorProject(user, input = {}, {
         storyboard: emptyStoryboard(),
         timeline: storyboardToTimeline(emptyStoryboard(), []),
         workflowReferences: [],
+        workflowRuns: [],
         publishDrafts: [],
     };
     try {
@@ -569,6 +570,23 @@ export async function saveCreatorConversation(user, projectId, input = {}, {
     assertExpectedRevision(project, input.expectedRevision);
     const conversation = normalizeConversation(input.conversation || input);
     const next = updatedProject(project, { conversation }, now);
+    await writeProject(next, { configuration, blobStore, allowOverwrite: true });
+    return projectForClient(next);
+}
+
+export async function mutateCreatorProject(user, projectId, mutator, {
+    env = process.env,
+    blobStore = defaultBlobStore,
+    now = Date.now(),
+    expectedRevision,
+} = {}) {
+    const { configuration, owner } = storeContext(user, env);
+    const id = validProjectId(projectId);
+    const project = await readProject(owner, id, { configuration, blobStore });
+    if (expectedRevision != null) assertExpectedRevision(project, expectedRevision);
+    const patch = await mutator(project);
+    if (patch == null) return projectForClient(project);
+    const next = updatedProject(project, patch, now);
     await writeProject(next, { configuration, blobStore, allowOverwrite: true });
     return projectForClient(next);
 }

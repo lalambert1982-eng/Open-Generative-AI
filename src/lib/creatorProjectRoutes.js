@@ -16,6 +16,14 @@ import {
     saveCreatorConversation,
     saveCreatorStoryboard,
 } from './creatorProjectStore.js';
+import {
+    advanceWorkflowRun,
+    approveAndAdvanceWorkflowRun,
+    cancelWorkflowRun,
+    createWorkflowRun,
+    findWorkflowRun,
+    retryWorkflowNode,
+} from './creatorWorkflowEngine.js';
 
 const MAX_PROJECT_REQUEST_BYTES = 1024 * 1024;
 const ALLOWED_UPLOAD_TYPES = Object.freeze([
@@ -147,6 +155,7 @@ export async function handleCreatorProjectRoute(request, {
     blobStore,
     now = Date.now(),
     idGenerator,
+    fetchImpl = fetch,
     handleUploadImpl = handleUpload,
 } = {}) {
     const normalizedMethod = String(method || 'GET').toUpperCase();
@@ -199,6 +208,34 @@ export async function handleCreatorProjectRoute(request, {
             const input = await parseProjectJson(request, env);
             const project = await saveCreatorConversation(auth.user, path[0], input, { env, blobStore, now });
             return creatorJson({ project });
+        }
+        if (normalizedMethod === 'GET' && path.length === 2 && path[1] === 'workflows') {
+            const project = await getCreatorProject(auth.user, path[0], { env, blobStore });
+            return creatorJson({ workflowRuns: Array.isArray(project.workflowRuns) ? project.workflowRuns : [] });
+        }
+        if (normalizedMethod === 'POST' && path.length === 2 && path[1] === 'workflows') {
+            const input = await parseProjectJson(request, env);
+            const result = await createWorkflowRun(auth.user, path[0], input, { env, blobStore, now, idGenerator });
+            return creatorJson(result, 201);
+        }
+        if (normalizedMethod === 'GET' && path.length === 3 && path[1] === 'workflows') {
+            const project = await getCreatorProject(auth.user, path[0], { env, blobStore });
+            const run = findWorkflowRun(project, path[2]);
+            if (!run) return creatorJson({ error: 'Workflow run was not found.', code: 'workflow_not_found' }, 404);
+            return creatorJson({ run });
+        }
+        if (normalizedMethod === 'POST' && path.length === 4 && path[1] === 'workflows') {
+            const action = path[3];
+            const runners = {
+                advance: advanceWorkflowRun,
+                approve: approveAndAdvanceWorkflowRun,
+                retry: retryWorkflowNode,
+                cancel: cancelWorkflowRun,
+            };
+            const runner = runners[action];
+            if (!runner) return creatorJson({ error: 'Creator Project route not found.' }, 404);
+            const result = await runner(auth.user, path[0], path[2], { env, blobStore, now, idGenerator, fetchImpl });
+            return creatorJson(result);
         }
         return creatorJson({ error: 'Creator Project route not found.' }, 404);
     } catch (error) {

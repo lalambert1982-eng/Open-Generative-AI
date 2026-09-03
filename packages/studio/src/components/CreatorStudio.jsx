@@ -10,6 +10,7 @@ import {
   Download,
   ExternalLink,
   Film,
+  GitBranch,
   Image as ImageIcon,
   Layers3,
   LoaderCircle,
@@ -23,6 +24,7 @@ import {
   WandSparkles,
 } from "lucide-react";
 import StoryboardWorkspace from "./StoryboardWorkspace";
+import WorkflowRunPanel from "./WorkflowRunPanel";
 import { buildProjectMediaRequest } from "./storyboardWorkspaceModel";
 
 const YOUTUBE_VIDEO_TYPES = new Set([
@@ -87,6 +89,15 @@ const TOOLS = [
     description: "Generate from text or automatically animate a supplied first-frame image.",
     icon: Film,
     accent: "from-pink-500 to-rose-500",
+  },
+  {
+    id: "workflow",
+    label: "Workflow",
+    provider: "muapi",
+    eyebrow: "Automate",
+    description: "Run a sequential, project-scoped pipeline of approved generation steps.",
+    icon: GitBranch,
+    accent: "from-lime-400 to-emerald-500",
   },
   {
     id: "publish",
@@ -758,6 +769,7 @@ export default function CreatorStudio({
   onConversationChange,
   onStoryboardChange,
   onProjectNameChange,
+  onProjectChange,
   workspaceLabel = "Creator Studio",
 }) {
   const [session, setSession] = useState(null);
@@ -1457,7 +1469,16 @@ export default function CreatorStudio({
           />
         </main>
 
-        {activeTool.id !== "storyboard" && (
+        <main className={cx("min-h-0 min-w-0 flex-1 overflow-hidden", activeTool.id !== "workflow" && "hidden")}>
+          <WorkflowRunPanel
+            project={project}
+            request={request}
+            onProjectChange={onProjectChange}
+            onStoryboardChange={onStoryboardChange}
+          />
+        </main>
+
+        {activeTool.id !== "storyboard" && activeTool.id !== "workflow" && (
           <>
         <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <div className="flex shrink-0 items-center justify-between border-b border-white/[0.05] px-5 py-3">

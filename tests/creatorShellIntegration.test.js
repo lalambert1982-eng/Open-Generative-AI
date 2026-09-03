@@ -165,3 +165,43 @@ test('Social publish confirmation guards against a double-submit race with a syn
     assert.match(social, /publishInFlightRef\.current = true;/);
     assert.match(social, /publishInFlightRef\.current = false;/);
 });
+
+test('Workflow Execution reuses the Creator Studio shell instead of a second Workflows product', async () => {
+    const creator = await read('../packages/studio/src/components/CreatorStudio.jsx');
+    const shell = await read('../components/StandaloneShell.js');
+    const panel = await read('../packages/studio/src/components/WorkflowRunPanel.jsx');
+    const nav = await read('../src/lib/studioNavigation.js');
+    const selena = await read('../src/lib/selenaOrchestrator.js');
+
+    // The new Workflow tab lives inside the existing CreatorStudio tool shell,
+    // not a standalone page, and reuses its own request() helper and onProjectChange
+    // wiring rather than duplicating fetch/session logic.
+    assert.match(creator, /id: "workflow"/);
+    assert.match(creator, /import WorkflowRunPanel from "\.\/WorkflowRunPanel"/);
+    assert.match(creator, /<WorkflowRunPanel[\s\S]*?request=\{request\}/);
+    assert.match(creator, /<WorkflowRunPanel[\s\S]*?onProjectChange=\{onProjectChange\}/);
+
+    // The legacy MuAPI-hosted Workflows product (WorkflowStudio/Vibe-Workflow) is
+    // left untouched and distinct from the new project-scoped destination.
+    assert.match(shell, /case 'workflows': return <WorkflowStudio/);
+    assert.match(shell, /case 'workflow-run': return <CreatorStudio[\s\S]*?initialToolId="workflow"/);
+    assert.match(nav, /id: 'workflow-run', label: 'Workflow Run', path: '\/studio\/apps\/workflow-run'/);
+
+    // Selena can only ever reach the new execution surface through the server
+    // allowlist, and starting a run is never itself treated as approval.
+    for (const action of ['workflow.create', 'workflow.configure', 'workflow.run', 'workflow.status']) {
+        assert.match(shell, new RegExp(`'${action.replace('.', '\\.')}': '/studio/apps/workflow-run'`));
+        assert.match(selena, new RegExp(`'${action.replace('.', '\\.')}': Object\\.freeze\\(\\{[\\s\\S]*?requiresApproval: false`));
+    }
+
+    // The status panel drives the project-scoped API and never a client-held
+    // provider credential, and offers the approve/retry/cancel controls the
+    // run's state machine requires.
+    assert.match(panel, /callAction\(`projects\/\$\{project\.id\}\/workflows`/);
+    assert.match(panel, /const response = await request\(path, options\);/);
+    assert.match(panel, /runStep\("approve"\)/);
+    assert.match(panel, /runStep\("retry"\)/);
+    assert.match(panel, /runStep\("cancel"\)/);
+    assert.match(panel, /workflows\/\$\{selectedRunId\}\/\$\{action\}/);
+    assert.doesNotMatch(panel, /apiKey/);
+});
