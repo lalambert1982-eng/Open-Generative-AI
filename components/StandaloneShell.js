@@ -431,6 +431,7 @@ export default function StandaloneShell() {
       'storyboard.create': '/studio/apps/scene-builder',
       'storyboard.addScene': '/studio/apps/scene-builder',
       'workflow.open': '/studio/workflows',
+      'workflow.run': '/studio/workflows',
       'asset.open': '/studio/assets',
       'asset.delete': '/studio/assets',
       'social.prepare': '/studio/publish',
@@ -505,7 +506,7 @@ export default function StandaloneShell() {
       case 'edit-studio': return <ClippingStudio {...legacyShared} />;
       case 'influencer': return <AiInfluencerStudio {...legacyShared} />;
       case 'marketing': return <MarketingStudio {...legacyShared} />;
-      case 'workflows': return <WorkflowStudio {...legacyShared} project={currentProject} onProjectRefresh={(projectId) => openProject(projectId || currentProject?.id)} isHeaderVisible={isHeaderVisible} onToggleHeader={setIsHeaderVisible} />;
+      case 'workflows': return <WorkflowStudio {...legacyShared} project={currentProject} initialAction={selenaAction} onProjectRefresh={(projectId) => openProject(projectId || currentProject?.id)} isHeaderVisible={isHeaderVisible} onToggleHeader={setIsHeaderVisible} />;
       case 'agent-blueprints': return <AgentStudio apiKey={apiKey} basePath="/studio/advanced/agents" />;
       case 'marketplace': return <AppsStudio apiKey={apiKey} />;
       case 'provider-settings': return <LegacyProviderSettings apiKey={apiKey} onSave={saveKey} onClear={clearKey} />;
@@ -560,7 +561,7 @@ export default function StandaloneShell() {
           </aside>
         )}
         <main className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
-          {!apiKey && LEGACY_DESTINATIONS.has(destinationId) && destinationId !== 'provider-settings'
+          {!apiKey && LEGACY_DESTINATIONS.has(destinationId) && destinationId !== 'provider-settings' && !(destinationId === 'workflows' && (projectsLoading || currentProject?.id))
             ? <LegacyProviderSettings apiKey={apiKey} onSave={saveKey} onClear={clearKey} requiredFor={destination.label} />
             : renderDestination()}
           {isDragging && <div className="pointer-events-none absolute inset-4 z-50 flex items-center justify-center rounded-3xl border-2 border-dashed border-cyan-300/40 bg-cyan-300/[0.08] backdrop-blur"><p className="text-sm font-bold text-cyan-100">Drop media into the active tool</p></div>}

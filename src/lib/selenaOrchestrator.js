@@ -60,6 +60,14 @@ export const SELENA_ACTION_REGISTRY = Object.freeze({
         sideEffect: null,
         fields: Object.freeze(['workflowId']),
     }),
+    'workflow.run': Object.freeze({
+        label: 'Review Workflow Run',
+        destination: '/studio/workflows',
+        requiresApproval: true,
+        available: true,
+        sideEffect: 'Opens the Workflow for review. Provider execution still requires a separate explicit Approve & Run confirmation.',
+        fields: Object.freeze(['workflowId']),
+    }),
     'asset.open': Object.freeze({
         label: 'Open Asset',
         destination: '/studio/assets',

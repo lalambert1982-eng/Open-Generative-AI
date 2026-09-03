@@ -64,6 +64,22 @@ function wait(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
+function creatorWorkflowForm(schema, project) {
+  const initial = {};
+  const storyboardScenes = Array.isArray(project?.storyboard?.scenes) ? project.storyboard.scenes : [];
+  const storyboardScene = storyboardScenes.find((scene) => scene.id === project?.storyboard?.selectedSceneId) || storyboardScenes[0] || null;
+  Object.entries(schema?.properties || {}).forEach(([key, prop]) => {
+    const configured = prop.default || (Array.isArray(prop.examples) ? prop.examples[0] : prop.examples) || "";
+    const lowerKey = key.toLowerCase();
+    if (configured || !storyboardScene) initial[key] = configured;
+    else if (lowerKey.includes("image")) initial[key] = storyboardScene.imageUrl || "";
+    else if (lowerKey.includes("video")) initial[key] = storyboardScene.videoUrl || "";
+    else if (lowerKey.includes("text") || lowerKey.includes("prompt")) initial[key] = storyboardScene.prompt || storyboardScene.title || "";
+    else initial[key] = configured;
+  });
+  return initial;
+}
+
 function WorkflowCard({ workflow, onClick, activeTab, onRename, onDelete }) {
   const [showOptions, setShowOptions] = useState(false);
 
@@ -169,6 +185,7 @@ export default function WorkflowStudio({
   onGenerationError,
   project = null,
   onProjectRefresh,
+  initialAction = null,
 }) {
   const params = useParams();
   const router = useRouter();
@@ -214,6 +231,12 @@ export default function WorkflowStudio({
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [creatorRun, setCreatorRun] = useState(null);
+
+  useEffect(() => {
+    const workflowId = initialAction?.parameters?.workflowId;
+    if (!workflowId || !["workflow.open", "workflow.run"].includes(initialAction?.action)) return;
+    router.push(`/workflow/${encodeURIComponent(workflowId)}/playground`);
+  }, [initialAction?.action, initialAction?.parameters?.workflowId, router]);
   
 
   // Handlers defined early so they can be used in effects
@@ -222,6 +245,7 @@ export default function WorkflowStudio({
       setSelectedWorkflow(wf);
       setResult(null);
       setError(null);
+      setCreatorRun(null);
       
       const targetTab = urlTab || "playground";
       setActiveSubTab(targetTab);
@@ -234,80 +258,68 @@ export default function WorkflowStudio({
     [router, urlTab],
   );
 
-  // Dedicated data fetching effect for the active workflow
+  // Dedicated data fetching effect for the active workflow.
+  // Project mode uses the Creator-authenticated server boundary so the browser
+  // never needs a MuAPI key just to browse/run a workflow.
   useEffect(() => {
-    if (!selectedWorkflow?.id || !apiKey) return;
+    if (!selectedWorkflow?.id || (!project?.id && !apiKey)) return;
+    let active = true;
 
     async function loadWorkflowDetails() {
       try {
         setLoading(true);
         const wfId = selectedWorkflow.id;
-        
-        // Fetch everything in parallel with allSettled so one failure doesn't block the others
+
+        if (project?.id) {
+          const response = await creatorWorkflowRequest(`inputs/${encodeURIComponent(wfId)}`);
+          if (!active) return;
+          const schema = response.input_data || response;
+          setInputSchema(schema);
+          setFormData(creatorWorkflowForm(schema, project));
+          setNodeSchemas(null);
+          setWorkflowDef(null);
+          return;
+        }
+
         const results = await Promise.allSettled([
           getWorkflowInputs(apiKey, wfId),
           getAllNodeSchemas(apiKey, wfId),
-          getWorkflowData(apiKey, wfId)
+          getWorkflowData(apiKey, wfId),
         ]);
+        if (!active) return;
 
-        // Process Input Schema
-        if (results[0].status === 'fulfilled') {
+        if (results[0].status === "fulfilled") {
           const response = results[0].value;
           const schema = response.input_data || response;
           setInputSchema(schema);
-
-          const initial = {};
-          const storyboardScenes = Array.isArray(project?.storyboard?.scenes) ? project.storyboard.scenes : [];
-          const storyboardScene = storyboardScenes.find((scene) => scene.id === project?.storyboard?.selectedSceneId) || storyboardScenes[0] || null;
-          Object.entries(schema.properties || {}).forEach(([key, prop]) => {
-            const configured =
-              prop.default ||
-              (Array.isArray(prop.examples) ? prop.examples[0] : prop.examples) ||
-              "";
-            const lowerKey = key.toLowerCase();
-            if (configured || !storyboardScene) {
-              initial[key] = configured;
-            } else if (lowerKey.includes("image")) {
-              initial[key] = storyboardScene.imageUrl || "";
-            } else if (lowerKey.includes("video")) {
-              initial[key] = storyboardScene.videoUrl || "";
-            } else if (lowerKey.includes("text") || lowerKey.includes("prompt")) {
-              initial[key] = storyboardScene.prompt || storyboardScene.title || "";
-            } else {
-              initial[key] = configured;
-            }
-          });
-          setFormData(initial);
+          setFormData(creatorWorkflowForm(schema, project));
         } else {
           console.warn("Input schema not available for this workflow:", results[0].reason);
           setInputSchema(null);
           setFormData({});
         }
 
-        // Process Builder State
-        const nodes = results[1].status === 'fulfilled' ? results[1].value : [];
-        const def = results[2].status === 'fulfilled' ? results[2].value : { nodes: [], edges: [] };
-
+        const nodes = results[1].status === "fulfilled" ? results[1].value : [];
+        const def = results[2].status === "fulfilled" ? results[2].value : { nodes: [], edges: [] };
         setNodeSchemas(nodes);
         setWorkflowDef(def);
-
-        if (results[1].status === 'rejected' || results[2].status === 'rejected') {
+        if (results[1].status === "rejected" || results[2].status === "rejected") {
           console.error("Builder components failed to load:", results[1].reason, results[2].reason);
-          if (!nodes.length && !def.nodes?.length) {
-             setError("Failed to load full builder data. Some features may be disabled.");
-          }
+          if (!nodes.length && !def.nodes?.length) setError("Failed to load full builder data. Some features may be disabled.");
         }
       } catch (err) {
-        console.error("Critical error loading pulse details:", err);
-        setError("Critical error loading builder: " + err.message);
+        if (!active) return;
+        console.error("Critical error loading workflow details:", err);
+        setError("Critical error loading workflow: " + err.message);
         setNodeSchemas([]);
         setWorkflowDef({ nodes: [], edges: [] });
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     }
 
     loadWorkflowDetails();
+    return () => { active = false; };
   }, [selectedWorkflow?.id, apiKey, project?.id, project?.storyboard?.selectedSceneId]);
 
   const handleCreateWorkflow = useCallback(
@@ -429,27 +441,54 @@ export default function WorkflowStudio({
   ]);
 
   useEffect(() => {
+    let active = true;
     async function loadWorkflows() {
       try {
         setLoading(true);
         let data = [];
-        if (activeMainTab === "templates") {
-          data = await getTemplateWorkflows(apiKey);
-        } else if (activeMainTab === "my-workflows") {
-          data = await getUserWorkflows(apiKey);
-        } else if (activeMainTab === "published") {
-          data = await getPublishedWorkflows(apiKey);
+        if (project?.id) {
+          const catalog = activeMainTab === "templates" ? "templates" : activeMainTab === "my-workflows" ? "mine" : "published";
+          const value = await creatorWorkflowRequest(`catalog/${catalog}`);
+          data = Array.isArray(value.workflows) ? value.workflows : [];
+        } else if (apiKey) {
+          if (activeMainTab === "templates") data = await getTemplateWorkflows(apiKey);
+          else if (activeMainTab === "my-workflows") data = await getUserWorkflows(apiKey);
+          else if (activeMainTab === "published") data = await getPublishedWorkflows(apiKey);
         }
-        setWorkflows(data);
+        if (active) setWorkflows(data);
       } catch (err) {
+        if (!active) return;
         console.error("Failed to load workflows:", err);
         setError("Failed to load workflows list.");
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     }
     loadWorkflows();
-  }, [apiKey, activeMainTab]);
+    return () => { active = false; };
+  }, [apiKey, activeMainTab, project?.id]);
+
+  useEffect(() => {
+    if (!project?.id || !selectedWorkflow?.id || creatorRun?.id) return;
+    let active = true;
+    creatorWorkflowRequest(`list/${encodeURIComponent(project.id)}`)
+      .then((value) => {
+        if (!active) return;
+        const latest = (Array.isArray(value.runs) ? value.runs : []).find((run) => run.workflowId === selectedWorkflow.id) || null;
+        setCreatorRun(latest);
+        if (latest?.status === "completed") {
+          setResult({ creatorRun: latest, outputs: [] });
+          setError(null);
+        } else if (latest?.status === "failed") {
+          setResult(null);
+          setError(latest.error || "Workflow execution failed.");
+        }
+      })
+      .catch((err) => {
+        if (active) setError(err.message || "Saved Workflow run status could not be restored.");
+      });
+    return () => { active = false; };
+  }, [creatorRun?.id, project?.id, selectedWorkflow?.id]);
 
   const finishCreatorRun = useCallback(async (run) => {
     setCreatorRun(run);
@@ -476,6 +515,21 @@ export default function WorkflowStudio({
     }
     return finishCreatorRun(run);
   }, [finishCreatorRun]);
+
+  const handleRefreshCreatorRun = async () => {
+    if (!project?.id || !creatorRun?.id || isExecuting) return;
+    setIsExecuting(true);
+    setError(null);
+    try {
+      const value = await creatorWorkflowRequest(`status/${encodeURIComponent(project.id)}/${encodeURIComponent(creatorRun.id)}`);
+      setCreatorRun(value.run);
+      if (!["queued", "running"].includes(value.run?.status)) await finishCreatorRun(value.run);
+    } catch (err) {
+      setError(err.message || "Workflow status could not be refreshed.");
+    } finally {
+      setIsExecuting(false);
+    }
+  };
 
   const handleRun = async (e) => {
     e.preventDefault();
@@ -874,6 +928,28 @@ export default function WorkflowStudio({
                       <button type="button" onClick={handleCancelCreatorRun} className="rounded-xl border border-white/10 px-4 py-2.5 text-[10px] font-black uppercase tracking-wider text-white/50 hover:bg-white/[0.05]">Cancel</button>
                       <button type="button" onClick={handleApproveCreatorRun} className="rounded-xl bg-amber-200 px-4 py-2.5 text-[10px] font-black uppercase tracking-wider text-black hover:bg-white">Approve & Run</button>
                     </div>
+                  </div>
+                )}
+
+                {!isExecuting && !result && !error && ["queued", "running"].includes(creatorRun?.status) && (
+                  <div className="w-full max-w-lg rounded-2xl border border-cyan-300/20 bg-cyan-300/[0.05] p-6">
+                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-cyan-200">{creatorRun.status}</div>
+                    <h3 className="mt-2 text-lg font-bold text-white">Workflow run is in progress</h3>
+                    <p className="mt-2 text-sm leading-6 text-white/45">This durable run was restored from the Project. Refresh status to check for new node results without submitting it again.</p>
+                    {creatorRun.nodeStates?.length > 0 && (
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {creatorRun.nodeStates.map((node) => <span key={node.id} className="rounded-full border border-white/10 bg-black/30 px-3 py-1 text-[9px] font-bold uppercase tracking-wider text-white/50">{node.id} · {node.status}</span>)}
+                      </div>
+                    )}
+                    <button type="button" onClick={handleRefreshCreatorRun} className="mt-5 rounded-xl bg-cyan-200 px-4 py-2.5 text-[10px] font-black uppercase tracking-wider text-black hover:bg-white">Refresh status</button>
+                  </div>
+                )}
+
+                {!isExecuting && !result && !error && creatorRun?.status === "cancelled" && (
+                  <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-white/[0.04] p-6">
+                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-white/45">Cancelled</div>
+                    <h3 className="mt-2 text-lg font-bold text-white">This Workflow run was cancelled</h3>
+                    <button type="button" onClick={handleRetryCreatorRun} className="mt-5 rounded-xl bg-white px-4 py-2.5 text-[10px] font-black uppercase tracking-wider text-black">Prepare retry</button>
                   </div>
                 )}
 

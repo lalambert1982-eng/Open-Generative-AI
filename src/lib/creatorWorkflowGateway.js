@@ -95,12 +95,27 @@ async function parseJson(request, env, route) {
     return value;
 }
 
-function providerConfiguration(env) {
+function providerReadConfiguration(env) {
+    const configuration = muapiConfiguration(env);
+    const missing = Array.isArray(configuration.missing)
+        ? configuration.missing.filter((item) => item !== 'MUAPI_ALLOW_PAID_GENERATION=true')
+        : [];
+    if (missing.length > 0) {
+        throw new CreatorWorkflowError(
+            'workflow_provider_unconfigured',
+            'MuAPI Workflow access is not configured for this environment.',
+            503,
+        );
+    }
+    return configuration;
+}
+
+function providerExecutionConfiguration(env) {
     const configuration = muapiConfiguration(env);
     if (!configuration.configured) {
         throw new CreatorWorkflowError(
             'workflow_provider_unconfigured',
-            'MuAPI Workflow execution is not configured for this environment.',
+            'MuAPI Workflow execution is not configured or paid generation is not enabled for this environment.',
             503,
         );
     }
@@ -153,6 +168,119 @@ async function providerJson(fetchImpl, url, options, configuration, timeoutMs = 
         throw new CreatorWorkflowError('workflow_provider_unavailable', detail || 'MuAPI Workflow service is temporarily unavailable.', 502);
     }
     return value;
+}
+
+
+function workflowIdFromPath(value) {
+    const id = normalized(value);
+    if (!OPAQUE_ID_PATTERN.test(id)) {
+        throw new CreatorWorkflowError('invalid_workflow', 'A valid Workflow ID is required.');
+    }
+    return id;
+}
+
+function workflowCatalogSource(value) {
+    if (Array.isArray(value)) return value;
+    for (const key of ['workflows', 'items', 'data', 'results']) {
+        if (Array.isArray(value?.[key])) return value[key];
+    }
+    return [];
+}
+
+function publicWorkflowCatalog(value) {
+    return workflowCatalogSource(value).slice(0, 100).map((item, index) => {
+        const id = normalized(item?.id || item?.workflow_id || item?.workflowId || item?._id);
+        if (!OPAQUE_ID_PATTERN.test(id)) return null;
+        return {
+            id,
+            workflow_id: id,
+            name: safeProviderText(item?.name || item?.title || `Workflow ${index + 1}`).slice(0, 160) || `Workflow ${index + 1}`,
+            category: safeProviderText(item?.category || item?.type || 'General').slice(0, 80) || 'General',
+            user_name: safeProviderText(item?.user_name || item?.userName || '').slice(0, 100) || null,
+        };
+    }).filter(Boolean);
+}
+
+function publicSchemaScalar(value, maximum = 4000) {
+    if (typeof value === 'string') return safeProviderText(value).slice(0, maximum);
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    return undefined;
+}
+
+function publicWorkflowInputSchema(value) {
+    const source = value?.input_data && typeof value.input_data === 'object' && !Array.isArray(value.input_data)
+        ? value.input_data
+        : value;
+    const sourceProperties = source?.properties && typeof source.properties === 'object' && !Array.isArray(source.properties)
+        ? source.properties
+        : {};
+    const properties = {};
+    for (const [key, raw] of Object.entries(sourceProperties).slice(0, 100)) {
+        if (!/^[A-Za-z][A-Za-z0-9._-]{0,79}$/.test(key)) continue;
+        if (/^(?:api[-_]?key|x[-_]?api[-_]?key|authorization|credential|credentials|password|secret|token)$/i.test(key)) continue;
+        const item = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+        const type = ['string', 'number', 'integer', 'boolean'].includes(normalized(item.type).toLowerCase())
+            ? normalized(item.type).toLowerCase()
+            : 'string';
+        const property = { type };
+        const title = publicSchemaScalar(item.title, 160);
+        const description = publicSchemaScalar(item.description, 1000);
+        if (title) property.title = title;
+        if (description) property.description = description;
+        const defaultValue = publicSchemaScalar(item.default);
+        if (defaultValue !== undefined) property.default = defaultValue;
+        if (Array.isArray(item.enum)) {
+            const values = item.enum.map((entry) => publicSchemaScalar(entry, 500)).filter((entry) => entry !== undefined).slice(0, 50);
+            if (values.length > 0) property.enum = values;
+        }
+        if (Array.isArray(item.examples)) {
+            const examples = item.examples.map((entry) => publicSchemaScalar(entry, 1000)).filter((entry) => entry !== undefined).slice(0, 10);
+            if (examples.length > 0) property.examples = examples;
+        } else {
+            const example = publicSchemaScalar(item.examples, 1000);
+            if (example !== undefined) property.examples = example;
+        }
+        properties[key] = property;
+    }
+    return {
+        input_data: {
+            type: 'object',
+            properties,
+        },
+    };
+}
+
+async function creatorWorkflowCatalog(kind, options) {
+    const endpoints = {
+        templates: 'get-template-workflows',
+        mine: 'get-workflow-defs',
+        published: 'get-published-workflows',
+    };
+    const endpoint = endpoints[kind];
+    if (!endpoint) throw new CreatorWorkflowError('invalid_workflow_catalog', 'Workflow catalog is invalid.');
+    const configuration = providerReadConfiguration(options.env);
+    const value = await providerJson(
+        options.fetchImpl,
+        buildMuapiUrl('workflow', [endpoint]),
+        { method: 'GET' },
+        configuration,
+        30_000,
+    );
+    return publicWorkflowCatalog(value);
+}
+
+async function creatorWorkflowInputs(workflowId, options) {
+    const id = workflowIdFromPath(workflowId);
+    const configuration = providerReadConfiguration(options.env);
+    const value = await providerJson(
+        options.fetchImpl,
+        buildMuapiUrl('workflow', [id, 'api-inputs']),
+        { method: 'GET' },
+        configuration,
+        30_000,
+    );
+    return publicWorkflowInputSchema(value);
 }
 
 function providerRunId(value) {
@@ -278,7 +406,7 @@ async function submitRun(user, input, options) {
         throw new CreatorWorkflowError('workflow_run_not_executable', 'This Workflow run must be retried before it can execute again.', 409);
     }
 
-    const configuration = providerConfiguration(options.env);
+    const configuration = providerExecutionConfiguration(options.env);
     let value;
     try {
         value = await providerJson(
@@ -335,7 +463,7 @@ async function refreshRun(user, projectId, runId, options) {
     if (!['queued', 'running'].includes(run.status) || !run.providerRunId) {
         return getCreatorWorkflowRun(user, projectId, runId, options);
     }
-    const configuration = providerConfiguration(options.env);
+    const configuration = providerReadConfiguration(options.env);
     let value;
     try {
         value = await providerJson(
@@ -405,6 +533,14 @@ export async function handleCreatorWorkflowRoute(request, {
 
     const options = { env, blobStore, now, idGenerator, assetIdGenerator, fetchImpl };
     try {
+        if (normalizedMethod === 'GET' && path.length === 2 && path[0] === 'catalog') {
+            const workflows = await creatorWorkflowCatalog(path[1], options);
+            return creatorJson({ workflows });
+        }
+        if (normalizedMethod === 'GET' && path.length === 2 && path[0] === 'inputs') {
+            const schema = await creatorWorkflowInputs(path[1], options);
+            return creatorJson(schema);
+        }
         if (normalizedMethod === 'POST' && path.length === 1 && path[0] === 'prepare') {
             const input = await parseJson(request, env, 'prepare');
             const run = await prepareCreatorWorkflowRun(auth.user, input, options);
