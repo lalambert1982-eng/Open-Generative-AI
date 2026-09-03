@@ -1,0 +1,263 @@
+name: Phase 3 Agent Acceptance
+
+on:
+  push:
+    branches:
+      - feature/selena-agent-blueprint
+
+permissions:
+  contents: read
+
+jobs:
+  text-only-agent-acceptance:
+    name: Text-only Content Writer acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MUAPI_PRODUCTION_API_KEY: ${{ secrets.MUAPI_PRODUCTION_API_KEY }}
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Run capped text-only acceptance
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { createCreatorSession, creatorCookieSettings } from './src/lib/creatorAuth.js';
+          import { createCreatorProject, creatorProjectStoreForTests } from './src/lib/creatorProjectStore.js';
+          import { creatorAgentAuditStoreForTests } from './src/lib/creatorAgentAuditStore.js';
+          import { CREATOR_AGENT_REGISTRY } from './src/lib/creatorAgentRegistry.js';
+          import { handleSelenaAgentAssistant } from './src/lib/selenaAgentAssistant.js';
+
+          const key = String(process.env.MUAPI_PRODUCTION_API_KEY || '').trim();
+          if (!key) {
+            console.log('PHASE3_STATUS=BLOCKED_NO_GITHUB_ACTIONS_MUAPI_PRODUCTION_KEY');
+            process.exit(0);
+          }
+
+          const BASE = 'https://api.muapi.ai';
+          const CAP = 0.10;
+          const definition = CREATOR_AGENT_REGISTRY['content-writer'];
+          const safeHeaders = { 'x-api-key': key, 'content-type': 'application/json' };
+
+          async function api(path, options = {}) {
+            const response = await fetch(`${BASE}${path}`, {
+              ...options,
+              headers: { ...safeHeaders, ...(options.headers || {}) },
+              redirect: 'error',
+            });
+            const text = await response.text();
+            let body = {};
+            try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text.slice(0, 200) }; }
+            if (!response.ok) {
+              const err = new Error(`MuAPI ${path} failed with HTTP ${response.status}`);
+              err.status = response.status;
+              err.body = body;
+              throw err;
+            }
+            return { response, body };
+          }
+
+          async function balance() {
+            const { body } = await api('/api/v1/account/balance', { method: 'GET', headers: { 'content-type': undefined } });
+            const value = Number(body.balance ?? body.amount_usd ?? body.credit_balance);
+            return Number.isFinite(value) ? value : null;
+          }
+
+          const before = await balance();
+          console.log(`BALANCE_BEFORE_KNOWN=${before !== null}`);
+
+          const listed = await api('/agents/user/agents', { method: 'GET', headers: { 'content-type': undefined } });
+          const agents = Array.isArray(listed.body) ? listed.body : Array.isArray(listed.body?.agents) ? listed.body.agents : [];
+          let agent = agents.find((item) => String(item?.name || '').trim().toLowerCase() === definition.name.toLowerCase()) || null;
+          let createdForAcceptance = false;
+
+          if (!agent) {
+            const created = await api('/agents', {
+              method: 'POST',
+              body: JSON.stringify({
+                name: definition.name,
+                description: `[GFURY_CREATOR_AGENT:${definition.id}] ${definition.description}`,
+                system_prompt: definition.systemPrompt,
+                welcome_message: `I'm ${definition.name}. Selena can delegate ${definition.role} work to me.`,
+                skill_ids: [],
+                daily_credit_limit: CAP,
+              }),
+            });
+            agent = created.body?.agent || created.body?.data || created.body;
+            createdForAcceptance = true;
+            console.log('CONTENT_WRITER_PROVISIONED_FOR_ACCEPTANCE=true');
+          } else {
+            console.log('CONTENT_WRITER_ALREADY_PROVISIONED=true');
+          }
+
+          const agentKey = String(agent?.agent_id || agent?.slug || agent?.id || '').trim();
+          if (!agentKey) throw new Error('Content Writer Agent has no usable server identifier.');
+
+          async function getAgent() {
+            try {
+              return (await api(`/agents/by-slug/${encodeURIComponent(agentKey)}`, { method: 'GET', headers: { 'content-type': undefined } })).body;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              return (await api(`/agents/${encodeURIComponent(agentKey)}`, { method: 'GET', headers: { 'content-type': undefined } })).body;
+            }
+          }
+
+          let details = await getAgent();
+          const currentLimit = Number(details?.daily_credit_limit ?? agent?.daily_credit_limit);
+          const skills = Array.isArray(details?.skills) ? details.skills : [];
+          const needsHardening = skills.length > 0 || !Number.isFinite(currentLimit) || currentLimit > CAP;
+
+          if (needsHardening) {
+            const updateBody = {
+              system_prompt: definition.systemPrompt,
+              skill_ids: [],
+              daily_credit_limit: CAP,
+            };
+            let updated = false;
+            for (const path of [`/agents/by-slug/${encodeURIComponent(agentKey)}`, `/agents/${encodeURIComponent(agentKey)}`]) {
+              try {
+                await api(path, { method: 'PUT', body: JSON.stringify(updateBody) });
+                updated = true;
+                break;
+              } catch (error) {
+                if (error.status !== 404 && error.status !== 422) throw error;
+              }
+            }
+            if (!updated) {
+              console.log('PHASE3_STATUS=BLOCKED_CANNOT_ENFORCE_AGENT_CAP');
+              process.exit(0);
+            }
+            details = await getAgent();
+          }
+
+          const enforcedLimit = Number(details?.daily_credit_limit);
+          const enforcedSkills = Array.isArray(details?.skills) ? details.skills : [];
+          if (!Number.isFinite(enforcedLimit) || enforcedLimit > CAP + 1e-9) {
+            console.log('PHASE3_STATUS=BLOCKED_DAILY_CREDIT_LIMIT_NOT_ENFORCED');
+            process.exit(0);
+          }
+          if (enforcedSkills.length !== 0) {
+            console.log('PHASE3_STATUS=BLOCKED_CONTENT_WRITER_HAS_EXECUTION_SKILLS');
+            process.exit(0);
+          }
+          console.log(`AGENT_DAILY_CREDIT_LIMIT=${enforcedLimit.toFixed(4)}`);
+          console.log('AGENT_SKILLS=0');
+
+          const env = {
+            CREATOR_SESSION_SECRET: 'phase3-creator-session-secret-longer-than-thirty-two-characters',
+            CREATOR_GITHUB_ALLOWED_USER_IDS: '12345678',
+            CREATOR_GITHUB_ALLOWED_LOGINS: 'phase3-owner',
+            CREATOR_STUDIO_RATE_LIMIT: '50',
+            CREATOR_STUDIO_STATUS_RATE_LIMIT: '50',
+            CONTENT_SAFETY_MODE: 'enforce',
+            BLOB_READ_WRITE_TOKEN: 'phase3-memory-only-blob-token-long-enough',
+            MUAPI_KEY_MODE: 'production',
+            MUAPI_PRODUCTION_API_KEY: key,
+            MUAPI_ALLOW_PAID_GENERATION: 'false',
+            GEMINI_API_KEY: 'phase3-mocked-brain-provider-key',
+            BRAIN_PROVIDER: 'gemini',
+            BRAIN_ENABLE_AUTOMATIC_FALLBACK: 'false',
+            CREATOR_AGENT_AUTO_PROVISION: 'false',
+          };
+          const user = { id: 12345678, login: 'phase3-owner' };
+          const projectStore = creatorProjectStoreForTests();
+          const auditStore = creatorAgentAuditStoreForTests();
+          const project = await createCreatorProject(user, { name: 'Phase 3 Acceptance' }, { env, blobStore: projectStore });
+          const session = createCreatorSession(user, { env });
+          const cookieName = creatorCookieSettings(env).sessionName;
+
+          const request = new Request('https://phase3.local/api/creator/assistant', {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              cookie: `${cookieName}=${session}`,
+              origin: 'https://phase3.local',
+              'sec-fetch-site': 'same-origin',
+            },
+            body: JSON.stringify({
+              prompt: 'Write three short hooks for a Creator Studio launch video.',
+              mode: 'strategy',
+              projectId: project.id,
+              workspace: 'Selena',
+            }),
+          });
+
+          let observedCost = 0;
+          const fetchImpl = async (url, options = {}) => {
+            const href = String(url);
+            if (href.includes('generativelanguage.googleapis.com')) {
+              return new Response(JSON.stringify({
+                modelVersion: 'mocked-phase3-brain',
+                candidates: [{
+                  content: { parts: [{ text: JSON.stringify({
+                    message: 'I am delegating this writing task to the G.FURY Content Writer.',
+                    plan: ['Delegate the text-only writing task.', 'Return the normalized result.'],
+                    suggestedActions: [{
+                      action: 'agent.delegate',
+                      parameters: {
+                        agentId: 'content-writer',
+                        task: 'Write three short hooks for a Creator Studio launch video.',
+                      },
+                    }],
+                    referencedAssets: [],
+                  }) }] },
+                  finishReason: 'STOP',
+                }],
+              }), { status: 200, headers: { 'content-type': 'application/json' } });
+            }
+            const response = await fetch(href, options);
+            const headerCost = Number(response.headers.get('x-muapi-cost-usd'));
+            if (Number.isFinite(headerCost) && headerCost > observedCost) observedCost = headerCost;
+            return response;
+          };
+
+          const response = await handleSelenaAgentAssistant(request, {
+            env,
+            fetchImpl,
+            blobStore: projectStore,
+            auditBlobStore: auditStore,
+          });
+          const payload = await response.json();
+          assert.equal(response.status, 200);
+          assert.equal(payload?.agentDelegation?.status, 'completed');
+          assert.equal(payload?.agentResult?.agentId, 'content-writer');
+          assert.equal(payload?.agentResult?.agentName, 'G.FURY Content Writer');
+          assert.equal(Array.isArray(payload?.agentResult?.artifacts), true);
+          assert.equal(payload.agentResult.artifacts.length, 0);
+          assert.equal(Array.isArray(payload?.suggestedActions), true);
+          assert.equal(payload.suggestedActions.some((action) => ['image.generate', 'video.generate', 'social.publish', 'asset.delete'].includes(action?.action)), false);
+
+          const after = await balance();
+          const delta = before !== null && after !== null ? Math.max(0, before - after) : null;
+          if (delta !== null && delta > CAP + 1e-9) {
+            throw new Error(`Acceptance test exceeded approved spend cap: $${delta.toFixed(4)}`);
+          }
+          if (observedCost > CAP + 1e-9) {
+            throw new Error(`MuAPI response reported cost above approved cap: $${observedCost.toFixed(4)}`);
+          }
+
+          const message = String(payload.agentResult.message || '').replace(/[\r\n]+/g, ' ').slice(0, 1000);
+          console.log('PHASE3_STATUS=PASS');
+          console.log(`CONTENT_WRITER_CREATED=${createdForAcceptance}`);
+          console.log(`BALANCE_AFTER_KNOWN=${after !== null}`);
+          console.log(`MEASURED_SPEND_USD=${delta === null ? 'unknown' : delta.toFixed(6)}`);
+          console.log(`REPORTED_REQUEST_COST_USD=${observedCost.toFixed(6)}`);
+          console.log(`NORMALIZED_RESULT=${message}`);
+          console.log('MEDIA_GENERATION=NONE');
+          console.log('PUBLISHING=NONE');
+          NODE
