@@ -574,6 +574,27 @@ export async function saveCreatorConversation(user, projectId, input = {}, {
     return projectForClient(next);
 }
 
+// Serializes mutateCreatorProject calls per Project within this process — the
+// same technique StandaloneShell already uses client-side for its own request
+// queue. A revision recheck alone still leaves a check-then-write gap: two
+// truly concurrent calls can both pass the recheck before either has written.
+// Serializing here closes that gap for every request this process itself
+// handles; the recheck below remains as the second layer that catches a
+// change made by a *different* process (relevant to a multi-instance
+// deployment, where this in-process queue alone cannot see across instances).
+const projectMutationQueues = new Map();
+
+function enqueueProjectMutation(key, operation) {
+    const previous = projectMutationQueues.get(key) || Promise.resolve();
+    const next = previous.catch(() => {}).then(operation);
+    const settled = next.catch(() => {});
+    projectMutationQueues.set(key, settled);
+    settled.finally(() => {
+        if (projectMutationQueues.get(key) === settled) projectMutationQueues.delete(key);
+    });
+    return next;
+}
+
 export async function mutateCreatorProject(user, projectId, mutator, {
     env = process.env,
     blobStore = defaultBlobStore,
@@ -582,21 +603,23 @@ export async function mutateCreatorProject(user, projectId, mutator, {
 } = {}) {
     const { configuration, owner } = storeContext(user, env);
     const id = validProjectId(projectId);
-    const project = await readProject(owner, id, { configuration, blobStore });
-    if (expectedRevision != null) assertExpectedRevision(project, expectedRevision);
-    const patch = await mutator(project);
-    if (patch == null) return projectForClient(project);
-    // mutator may have awaited slow work (a provider call) between the read
-    // above and here. Re-read immediately before writing and refuse to
-    // overwrite a Project another request already changed in that window,
-    // rather than silently discarding that other write.
-    const current = await readProject(owner, id, { configuration, blobStore });
-    if (current.revision !== project.revision) {
-        throw new CreatorProjectError('project_conflict', 'Project changed in another request. Reload it and try again.', 409);
-    }
-    const next = updatedProject(project, patch, now);
-    await writeProject(next, { configuration, blobStore, allowOverwrite: true });
-    return projectForClient(next);
+    return enqueueProjectMutation(`${owner}:${id}`, async () => {
+        const project = await readProject(owner, id, { configuration, blobStore });
+        if (expectedRevision != null) assertExpectedRevision(project, expectedRevision);
+        const patch = await mutator(project);
+        if (patch == null) return projectForClient(project);
+        // Belt-and-suspenders: even under this process's own serialization, a
+        // different process could have written in between. Re-read
+        // immediately before writing and refuse to overwrite a Project
+        // another request already changed, rather than silently discarding it.
+        const current = await readProject(owner, id, { configuration, blobStore });
+        if (current.revision !== project.revision) {
+            throw new CreatorProjectError('project_conflict', 'Project changed in another request. Reload it and try again.', 409);
+        }
+        const next = updatedProject(project, patch, now);
+        await writeProject(next, { configuration, blobStore, allowOverwrite: true });
+        return projectForClient(next);
+    });
 }
 
 export function creatorProjectStoreForTests(records = new Map(), { now = Date.now() } = {}) {

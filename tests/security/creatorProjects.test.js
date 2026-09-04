@@ -298,3 +298,37 @@ test('mutateCreatorProject refuses to overwrite a Project changed by another req
     const final = await getCreatorProject(owner, projectId, { env, blobStore });
     assert.equal(final.name, 'Renamed mid-flight');
 });
+
+test('two concurrent mutateCreatorProject calls on the same Project never both pass their revision check', async () => {
+    const records = new Map();
+    const blobStore = creatorProjectStoreForTests(records);
+    await createCreatorProject(owner, { name: 'Serialized Project' }, {
+        env, blobStore, idGenerator: () => projectId, now: Date.UTC(2026, 0, 1),
+    });
+
+    // Two mutators that both start from the same initial revision and both
+    // await something slow before returning their patch — the classic
+    // check-then-act race a revision check alone (without serialization)
+    // cannot fully close, since both could pass their recheck before either
+    // has written.
+    const callOrder = [];
+    const mutate = (label, delayMs) => mutateCreatorProject(owner, projectId, async (project) => {
+        callOrder.push(`${label}-start`);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        callOrder.push(`${label}-end`);
+        return { name: `${project.name}-${label}` };
+    }, { env, blobStore, now: Date.UTC(2026, 0, 2) });
+
+    const [first, second] = await Promise.all([mutate('A', 20), mutate('B', 5)]);
+    // A resolves from its own write, made before B has even started; B then
+    // builds on A's already-written result.
+    assert.equal(first.name, 'Serialized Project-A');
+    assert.equal(second.name, 'Serialized Project-A-B');
+    // B's mutator only ever starts after A's has fully finished — proof the
+    // two calls were serialized, not interleaved.
+    assert.deepEqual(callOrder, ['A-start', 'A-end', 'B-start', 'B-end']);
+
+    const final = await getCreatorProject(owner, projectId, { env, blobStore });
+    assert.equal(final.name, 'Serialized Project-A-B');
+    assert.equal(final.revision, 3);
+});
