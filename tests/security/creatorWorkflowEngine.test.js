@@ -442,7 +442,7 @@ test('a Project write failure right after a successful provider submission never
     assert.equal(fetchCalls, 2, 'the retry performs exactly one new provider call');
 });
 
-function submitThenFlakyPoll({ failuresBeforeSuccess = Infinity } = {}) {
+function submitThenFlakyPoll({ failuresBeforeSuccess = Infinity, failureStatus = 502 } = {}) {
     let pollCalls = 0;
     let submitCalls = 0;
     return {
@@ -451,7 +451,7 @@ function submitThenFlakyPoll({ failuresBeforeSuccess = Infinity } = {}) {
             if (target.includes('/predictions/')) {
                 pollCalls += 1;
                 if (pollCalls <= failuresBeforeSuccess) {
-                    return { ok: false, status: 503, text: async () => JSON.stringify({ error: { message: 'temporary upstream error' } }) };
+                    return { ok: false, status: failureStatus, text: async () => JSON.stringify({ error: { message: 'temporary upstream error' } }) };
                 }
                 return {
                     ok: true,
@@ -527,4 +527,26 @@ test('a node fails visibly after enough consecutive transient poll failures, nev
     assert.equal(result.run.nodes[0].status, 'failed');
     assert.equal(result.run.status, 'failed');
     assert.equal(flaky.counts().submitCalls, 1, 'even giving up must never have triggered a second paid submission');
+});
+
+test('a terminal poll rejection (e.g. job not found) fails the node immediately, not after 5 wasted attempts', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    const { run } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [{ kind: 'image.generate', prompt: 'a poll target the provider rejects outright' }],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+
+    // status 422 here simulates the provider outright rejecting the poll
+    // (e.g. "job not found") -- an identical retry will never succeed.
+    const rejected = submitThenFlakyPoll({ failuresBeforeSuccess: Infinity, failureStatus: 422 });
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: rejected.fetchImpl, now: Date.UTC(2026, 0, 3) });
+    await approveAndAdvanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: rejected.fetchImpl, now: Date.UTC(2026, 0, 4) });
+
+    const polled = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: rejected.fetchImpl, now: Date.UTC(2026, 0, 5) });
+    assert.equal(polled.run.nodes[0].status, 'failed', 'a terminal rejection must fail on the very first poll, not be retried as if transient');
+    assert.equal(rejected.counts().pollCalls, 1);
+    assert.equal(rejected.counts().submitCalls, 1);
 });

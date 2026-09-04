@@ -196,6 +196,18 @@ function buildWorkflowRunFromStoryboardScenes(project, { sceneIds, name } = {}, 
     });
 }
 
+// getMuapiGenerationJob maps its own failure into a small set of status
+// codes (see muapiCreatorProvider.js's providerFailure/networkFailure): 400
+// (invalid poll arguments) and 422 (the provider rejected the request outright
+// — e.g. the job no longer exists) will never change on an identical retry,
+// so those fail the node immediately. 503 (not configured) is equally not
+// something repeating the same poll will fix. 429 (rate limit) and 502/504
+// (network/timeout/momentary upstream unavailability) are genuinely
+// transient and get the retry budget.
+function isTransientPollStatus(status) {
+    return ![400, 422, 503].includes(status);
+}
+
 function providerKindFor(node) {
     return node.kind === 'image.generate' ? 'image' : 'video';
 }
@@ -417,7 +429,7 @@ export async function advanceWorkflowRun(user, projectId, runId, options = {}) {
                 // surfacing a visible failure after repeated consecutive
                 // poll failures.
                 const attempts = (node.pollFailures || 0) + 1;
-                if (attempts < MAX_TRANSIENT_POLL_FAILURES) {
+                if (isTransientPollStatus(result.status) && attempts < MAX_TRANSIENT_POLL_FAILURES) {
                     const updatedNode = { ...node, pollFailures: attempts };
                     return {
                         reason: 'node_poll_retry',
