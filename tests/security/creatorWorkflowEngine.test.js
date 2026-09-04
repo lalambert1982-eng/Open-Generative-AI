@@ -441,3 +441,90 @@ test('a Project write failure right after a successful provider submission never
     assert.equal(succeeded.run.nodes[0].status, 'completed');
     assert.equal(fetchCalls, 2, 'the retry performs exactly one new provider call');
 });
+
+function submitThenFlakyPoll({ failuresBeforeSuccess = Infinity } = {}) {
+    let pollCalls = 0;
+    let submitCalls = 0;
+    return {
+        fetchImpl: async (url) => {
+            const target = String(url);
+            if (target.includes('/predictions/')) {
+                pollCalls += 1;
+                if (pollCalls <= failuresBeforeSuccess) {
+                    return { ok: false, status: 503, text: async () => JSON.stringify({ error: { message: 'temporary upstream error' } }) };
+                }
+                return {
+                    ok: true,
+                    status: 200,
+                    text: async () => JSON.stringify({ id: 'flaky-job-1', status: 'succeeded', output: ['https://cdn.muapi.ai/flaky-out.png'] }),
+                };
+            }
+            submitCalls += 1;
+            return { ok: true, status: 200, text: async () => JSON.stringify({ id: 'flaky-job-1', status: 'processing' }) };
+        },
+        counts: () => ({ submitCalls, pollCalls }),
+    };
+}
+
+test('a transient poll failure keeps the node running on its existing job instead of failing it', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    const { run } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [{ kind: 'image.generate', prompt: 'a flaky poll target' }],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+
+    const flaky = submitThenFlakyPoll({ failuresBeforeSuccess: 2 });
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: flaky.fetchImpl, now: Date.UTC(2026, 0, 3) });
+    // Approve + submit: the provider accepts the job but it's still "processing".
+    const submitted = await approveAndAdvanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: flaky.fetchImpl, now: Date.UTC(2026, 0, 4) });
+    assert.equal(submitted.run.nodes[0].status, 'running');
+    const jobId = submitted.run.nodes[0].jobId;
+    assert.ok(jobId);
+
+    // First poll attempt fails transiently (a network blip, not a job failure).
+    const afterFirstFailedPoll = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: flaky.fetchImpl, now: Date.UTC(2026, 0, 5) });
+    assert.equal(afterFirstFailedPoll.run.nodes[0].status, 'running', 'a transient poll error must not fail the node');
+    assert.equal(afterFirstFailedPoll.run.nodes[0].jobId, jobId, 'the same job must still be tracked, not abandoned');
+    assert.equal(afterFirstFailedPoll.run.nodes[0].pollFailures, 1);
+
+    // Second poll attempt also fails transiently.
+    const afterSecondFailedPoll = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: flaky.fetchImpl, now: Date.UTC(2026, 0, 6) });
+    assert.equal(afterSecondFailedPoll.run.nodes[0].status, 'running');
+    assert.equal(afterSecondFailedPoll.run.nodes[0].pollFailures, 2);
+
+    // Third poll succeeds — the job resumes and completes, and the failure
+    // counter is cleared. Crucially, submitCalls stayed at 1 the whole time:
+    // the transient poll errors never triggered a second paid submission.
+    const finished = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: flaky.fetchImpl, now: Date.UTC(2026, 0, 7) });
+    assert.equal(finished.run.nodes[0].status, 'completed');
+    assert.equal(finished.run.nodes[0].jobId, jobId);
+    assert.equal(flaky.counts().submitCalls, 1, 'transient poll failures must never cause a second paid submission');
+});
+
+test('a node fails visibly after enough consecutive transient poll failures, never polling forever silently', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    const { run } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [{ kind: 'image.generate', prompt: 'a permanently unreachable poll target' }],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+
+    const flaky = submitThenFlakyPoll({ failuresBeforeSuccess: Infinity });
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: flaky.fetchImpl, now: Date.UTC(2026, 0, 3) });
+    await approveAndAdvanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: flaky.fetchImpl, now: Date.UTC(2026, 0, 4) });
+
+    let result;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        result = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: flaky.fetchImpl, now: Date.UTC(2026, 0, 5 + attempt) });
+        if (result.run.nodes[0].status === 'failed') break;
+    }
+    assert.equal(result.run.nodes[0].status, 'failed');
+    assert.equal(result.run.status, 'failed');
+    assert.equal(flaky.counts().submitCalls, 1, 'even giving up must never have triggered a second paid submission');
+});

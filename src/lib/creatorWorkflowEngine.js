@@ -47,6 +47,11 @@ const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,139}$/;
 
 const MAX_WORKFLOW_RUNS = 20;
 const MAX_WORKFLOW_NODES = 20;
+// Consecutive poll-request failures (network/timeout/rate-limit/momentary
+// provider error) tolerated before a node is actually marked failed. A poll
+// failing does not mean the underlying job failed, so this must stay well
+// short of "immediately fail" to avoid ever orphaning a still-running job.
+const MAX_TRANSIENT_POLL_FAILURES = 5;
 
 export class CreatorWorkflowError extends CreatorProjectError {
     constructor(code, message, status = 400) {
@@ -119,6 +124,7 @@ function buildNode(kind, source, index, { idGenerator, now }) {
         approved: false,
         jobId: null,
         providerKind: null,
+        pollFailures: 0,
         outputAssetId: null,
         outputUrl: null,
         error: null,
@@ -401,6 +407,23 @@ export async function advanceWorkflowRun(user, projectId, runId, options = {}) {
             }
             const result = await pollNode(node, { env, fetchImpl });
             if (!result.ok) {
+                // A poll request failing (network blip, timeout, rate limit,
+                // a momentary provider 5xx) does not mean the job itself
+                // failed — it means we couldn't check. Failing the node here
+                // would orphan the already-submitted (possibly still
+                // succeeding) jobId, and a retry would then submit a second
+                // paid job for the same step. Keep the node "running" with
+                // the same jobId and retry the poll, only giving up and
+                // surfacing a visible failure after repeated consecutive
+                // poll failures.
+                const attempts = (node.pollFailures || 0) + 1;
+                if (attempts < MAX_TRANSIENT_POLL_FAILURES) {
+                    const updatedNode = { ...node, pollFailures: attempts };
+                    return {
+                        reason: 'node_poll_retry',
+                        run: { ...run, nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
+                    };
+                }
                 const updatedNode = { ...node, status: 'failed', error: result.error || 'Provider error.', completedAt: iso(now) };
                 return {
                     reason: 'node_failed',
@@ -416,6 +439,16 @@ export async function advanceWorkflowRun(user, projectId, runId, options = {}) {
                 return {
                     reason: 'node_failed',
                     run: { ...run, status: 'failed', nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
+                };
+            }
+            // Still processing. A successful poll (even with no terminal
+            // status yet) proves the job is reachable, so clear any
+            // accumulated transient-failure count.
+            if (node.pollFailures) {
+                const updatedNode = { ...node, pollFailures: 0 };
+                return {
+                    reason: 'node_poll_progress',
+                    run: { ...run, nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
                 };
             }
             return null; // still processing; nothing to persist yet
@@ -539,6 +572,7 @@ export async function retryWorkflowNode(user, projectId, runId, options = {}) {
             error: null,
             jobId: null,
             providerKind: null,
+            pollFailures: 0,
             startedAt: null,
             completedAt: null,
         };
