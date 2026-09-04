@@ -174,19 +174,31 @@ function networkFailure(result) {
         error: result.networkError === 'timeout'
             ? 'MuAPI request timed out.'
             : 'MuAPI is temporarily unavailable.',
+        // A genuine network-level failure (timeout, connection reset) is the
+        // textbook transient case: the same request may simply succeed later.
+        retryable: true,
     };
 }
 
 function providerFailure(response, value, secrets) {
     const detail = providerMessage(value, secrets);
     if (response.status === 401 || response.status === 403) {
-        return { ok: false, status: 502, error: 'MuAPI rejected the configured API credentials.' };
+        // Credential rejection cannot resolve itself by repeating the same
+        // request — the configured key isn't going to change between polls.
+        return { ok: false, status: 502, error: 'MuAPI rejected the configured API credentials.', retryable: false };
     }
     if (response.status === 429) {
         return {
             ok: false,
             status: 429,
             error: 'MuAPI rate limit or account balance limit was reached.',
+            // MuAPI does not distinguish "temporarily throttled" from
+            // "account balance exhausted" in this response — both collapse to
+            // 429 here. Since a genuinely exhausted balance will never
+            // resolve by repeating the identical request, treat 429 as
+            // non-retryable rather than risk masking that as "still
+            // working" for several more polling attempts.
+            retryable: false,
             ...(detail ? { detail } : {}),
         };
     }
@@ -194,6 +206,7 @@ function providerFailure(response, value, secrets) {
         return {
             ok: false,
             status: 422,
+            retryable: false,
             error: 'MuAPI rejected the generation request.',
             ...(detail ? { detail } : {}),
         };
@@ -202,6 +215,7 @@ function providerFailure(response, value, secrets) {
         ok: false,
         status: 502,
         error: 'MuAPI is temporarily unavailable.',
+        retryable: true,
         ...(detail ? { detail } : {}),
     };
 }
@@ -403,10 +417,11 @@ export async function getMuapiGenerationJob(jobId, kind, {
             status: 503,
             error: 'MuAPI is not configured.',
             missing: configuration.missing,
+            retryable: false,
         };
     }
     if (!OPAQUE_ID_PATTERN.test(jobId) || !['image', 'video'].includes(kind)) {
-        return { ok: false, status: 400, error: 'A valid MuAPI job ID and kind are required.' };
+        return { ok: false, status: 400, error: 'A valid MuAPI job ID and kind are required.', retryable: false };
     }
     const result = await fetchWithTimeout(
         fetchImpl,
@@ -416,7 +431,7 @@ export async function getMuapiGenerationJob(jobId, kind, {
     );
     if (result.networkError) return networkFailure(result);
     const decoded = await readProviderJson(result);
-    if (decoded.error) return { ok: false, status: 502, error: 'MuAPI returned an invalid response.' };
+    if (decoded.error) return { ok: false, status: 502, error: 'MuAPI returned an invalid response.', retryable: true };
     if (!result.ok) return providerFailure(result, decoded.value, [configuration.apiKey]);
     const model = kind === 'image' ? configuration.imageModel : configuration.videoModel;
     return {

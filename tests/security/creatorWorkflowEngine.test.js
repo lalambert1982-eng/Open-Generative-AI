@@ -550,3 +550,45 @@ test('a terminal poll rejection (e.g. job not found) fails the node immediately,
     assert.equal(rejected.counts().pollCalls, 1);
     assert.equal(rejected.counts().submitCalls, 1);
 });
+
+test('a rejected credential (401/403) fails the poll immediately even though it normalizes to the same status as a transient error', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    const { run } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [{ kind: 'image.generate', prompt: 'a poll rejected for bad credentials' }],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+
+    // The provider itself returns 401/403 here; muapiCreatorProvider.js
+    // normalizes that to the SAME status (502) a genuine network hiccup
+    // would produce, so this must be distinguished by the retryable flag,
+    // not the collapsed status code.
+    const rejected = submitThenFlakyPoll({ failuresBeforeSuccess: Infinity, failureStatus: 401 });
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: rejected.fetchImpl, now: Date.UTC(2026, 0, 3) });
+    await approveAndAdvanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: rejected.fetchImpl, now: Date.UTC(2026, 0, 4) });
+
+    const polled = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: rejected.fetchImpl, now: Date.UTC(2026, 0, 5) });
+    assert.equal(polled.run.nodes[0].status, 'failed', 'a rejected credential must never be treated as a transient network blip');
+    assert.equal(rejected.counts().pollCalls, 1);
+});
+
+test('a 429 (rate limit or exhausted balance) fails the poll immediately rather than risking 4 wasted retries on an exhausted balance', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    const { run } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [{ kind: 'image.generate', prompt: 'a poll rejected for exhausted balance' }],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+
+    const rejected = submitThenFlakyPoll({ failuresBeforeSuccess: Infinity, failureStatus: 429 });
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: rejected.fetchImpl, now: Date.UTC(2026, 0, 3) });
+    await approveAndAdvanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: rejected.fetchImpl, now: Date.UTC(2026, 0, 4) });
+
+    const polled = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: rejected.fetchImpl, now: Date.UTC(2026, 0, 5) });
+    assert.equal(polled.run.nodes[0].status, 'failed');
+    assert.equal(rejected.counts().pollCalls, 1);
+});

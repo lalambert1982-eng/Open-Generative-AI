@@ -196,16 +196,15 @@ function buildWorkflowRunFromStoryboardScenes(project, { sceneIds, name } = {}, 
     });
 }
 
-// getMuapiGenerationJob maps its own failure into a small set of status
-// codes (see muapiCreatorProvider.js's providerFailure/networkFailure): 400
-// (invalid poll arguments) and 422 (the provider rejected the request outright
-// — e.g. the job no longer exists) will never change on an identical retry,
-// so those fail the node immediately. 503 (not configured) is equally not
-// something repeating the same poll will fix. 429 (rate limit) and 502/504
-// (network/timeout/momentary upstream unavailability) are genuinely
-// transient and get the retry budget.
-function isTransientPollStatus(status) {
-    return ![400, 422, 503].includes(status);
+// muapiCreatorProvider.js normalizes every failure into a small set of HTTP
+// status codes, which on their own are ambiguous: a 502 covers both a
+// genuine network hiccup AND a rejected API credential, and a 429 covers both
+// transient rate-limiting AND an exhausted account balance — none of which
+// will resolve by repeating the identical poll. Rather than guess from the
+// collapsed status code, this reads the `retryable` flag the failure was
+// tagged with at its source, where the real distinction is still known.
+function isRetryablePollFailure(result) {
+    return result.retryable === true;
 }
 
 function providerKindFor(node) {
@@ -429,7 +428,7 @@ export async function advanceWorkflowRun(user, projectId, runId, options = {}) {
                 // surfacing a visible failure after repeated consecutive
                 // poll failures.
                 const attempts = (node.pollFailures || 0) + 1;
-                if (isTransientPollStatus(result.status) && attempts < MAX_TRANSIENT_POLL_FAILURES) {
+                if (isRetryablePollFailure(result) && attempts < MAX_TRANSIENT_POLL_FAILURES) {
                     const updatedNode = { ...node, pollFailures: attempts };
                     return {
                         reason: 'node_poll_retry',
