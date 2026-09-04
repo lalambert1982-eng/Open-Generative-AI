@@ -46,11 +46,13 @@ export const WORKFLOW_NODE_STATUSES = Object.freeze([
     'failed',
 ]);
 
+const TERMINAL_WORKFLOW_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+
 const WORKFLOW_NODE_KINDS = new Set(['image.generate', 'video.generate', 'video.animate', 'avatar.generate']);
 const ASPECT_RATIOS = new Set(['16:9', '9:16', '1:1']);
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,139}$/;
 
-const MAX_WORKFLOW_RUNS = 20;
+export const MAX_WORKFLOW_RUNS = 20;
 const MAX_WORKFLOW_NODES = 20;
 // Consecutive poll-request failures (network/timeout/rate-limit/momentary
 // provider error) tolerated before a node is actually marked failed. A poll
@@ -330,8 +332,15 @@ export async function createWorkflowRun(user, projectId, input = {}, options = {
     let createdRun = null;
     const project = await mutateCreatorProject(user, projectId, (proj) => {
         const runs = Array.isArray(proj.workflowRuns) ? proj.workflowRuns : [];
-        if (runs.length >= MAX_WORKFLOW_RUNS) {
-            throw new CreatorWorkflowError('workflow_limit', `A Project supports at most ${MAX_WORKFLOW_RUNS} workflow runs.`, 409);
+        // Only runs still in flight count against the cap — a completed, failed,
+        // or cancelled run is no longer consuming anything and must not
+        // permanently block a Project from ever starting another one. The
+        // Project's overall 1 MB storage ceiling (enforced on every write in
+        // creatorProjectStore.js) is what actually bounds unlimited terminal-run
+        // history, not this count.
+        const activeRuns = runs.filter((run) => !TERMINAL_WORKFLOW_RUN_STATUSES.has(run.status)).length;
+        if (activeRuns >= MAX_WORKFLOW_RUNS) {
+            throw new CreatorWorkflowError('workflow_limit', `A Project supports at most ${MAX_WORKFLOW_RUNS} active workflow runs at once.`, 409);
         }
         const run = input.source === 'storyboard'
             ? buildWorkflowRunFromStoryboardScenes(proj, input, { idGenerator, now })

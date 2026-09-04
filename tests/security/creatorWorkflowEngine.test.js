@@ -9,6 +9,7 @@ import {
 } from '../../src/lib/creatorProjectStore.js';
 import {
     CreatorWorkflowError,
+    MAX_WORKFLOW_RUNS,
     advanceWorkflowRun,
     approveAndAdvanceWorkflowRun,
     approveWorkflowNode,
@@ -735,4 +736,41 @@ test('a rejected HeyGen credential (401) fails an avatar.generate node immediate
     const failed = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: heygen.fetchImpl, now: Date.UTC(2026, 0, 5) });
     assert.equal(failed.run.nodes[0].status, 'failed', 'a rejected credential must never be treated as a transient network blip');
     assert.equal(heygen.counts().pollCalls, 1);
+});
+
+test('the workflow-run cap blocks piling up active runs but recovers once runs reach a terminal state', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    const createRun = () => createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [{ kind: 'image.generate', prompt: 'a capacity test run' }],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+
+    const runs = [];
+    for (let i = 0; i < MAX_WORKFLOW_RUNS; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        const { run } = await createRun();
+        runs.push(run);
+    }
+
+    // All MAX_WORKFLOW_RUNS runs are still active (queued): one more must be
+    // rejected rather than let a Project accumulate unbounded in-flight runs.
+    await assert.rejects(
+        createRun(),
+        (error) => error instanceof CreatorWorkflowError && error.code === 'workflow_limit',
+    );
+
+    // Cancelling every run moves them out of the active count entirely.
+    for (const run of runs) {
+        // eslint-disable-next-line no-await-in-loop
+        await cancelWorkflowRun(owner, projectAId, run.id, { env, blobStore, now: Date.UTC(2026, 0, 3) });
+    }
+
+    // A Project that has accumulated MAX_WORKFLOW_RUNS terminal runs must still
+    // be able to start a new one — a completed/cancelled run is not permanently
+    // occupying a slot, unlike the bug this regression test guards against.
+    const { run: recovered } = await createRun();
+    assert.equal(recovered.status, 'queued');
 });
