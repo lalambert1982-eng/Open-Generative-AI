@@ -12,18 +12,23 @@ import {
     createMuapiVideoJob,
     getMuapiGenerationJob,
 } from './muapiCreatorProvider.js';
+import {
+    createHeyGenAvatarVideoJob,
+    getHeyGenAvatarVideoJob,
+} from './heygenProvider.js';
 
 // Workflow Execution V1 is an execution layer over the existing Creator Project /
 // Asset system. It intentionally reuses the same Blob-backed project record
 // (mutateCreatorProject) and the same async job primitives already used by the
-// direct image/video tools (createMuapiImageJob/createMuapiVideoJob/
-// getMuapiGenerationJob) instead of introducing a new orchestration framework.
+// direct image/video/avatar tools (createMuapiImageJob/createMuapiVideoJob/
+// getMuapiGenerationJob/createHeyGenAvatarVideoJob/getHeyGenAvatarVideoJob)
+// instead of introducing a new orchestration framework.
 //
-// V1 node kinds are limited to the MuAPI image/video job family, which share one
-// uniform submit/poll/URL shape. HeyGen, ElevenLabs, OpenAI and Runway all return
-// either binary payloads or need additional identity inputs (avatar/voice IDs,
-// script text) that don't fit this uniform shape yet — adding them is future work,
-// not a stub started here.
+// Node kinds cover the MuAPI image/video job family plus HeyGen avatar video,
+// all of which share the same async submit-then-poll-a-jobId-to-a-URL shape.
+// ElevenLabs and OpenAI return raw binary payloads instead of a hosted URL, so
+// they don't fit this shape without adding a server-side asset upload step —
+// that remains future work, not a stub started here.
 export const WORKFLOW_RUN_STATUSES = Object.freeze([
     'queued',
     'running',
@@ -41,7 +46,7 @@ export const WORKFLOW_NODE_STATUSES = Object.freeze([
     'failed',
 ]);
 
-const WORKFLOW_NODE_KINDS = new Set(['image.generate', 'video.generate', 'video.animate']);
+const WORKFLOW_NODE_KINDS = new Set(['image.generate', 'video.generate', 'video.animate', 'avatar.generate']);
 const ASPECT_RATIOS = new Set(['16:9', '9:16', '1:1']);
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,139}$/;
 
@@ -82,6 +87,24 @@ function replaceAt(list, index, value) {
 
 function normalizeNodeInput(kind, source, index) {
     const value = source && typeof source === 'object' && !Array.isArray(source) ? source : {};
+
+    if (kind === 'avatar.generate') {
+        // HeyGen has its own full validation (normalizeHeyGenScriptInput) that
+        // createHeyGenAvatarVideoJob already runs before submission; this only
+        // needs to catch an empty script early with a node-scoped error.
+        const script = text(value.script, 5000);
+        if (!script) throw new CreatorWorkflowError('invalid_workflow_node', `Node ${index + 1} requires a script.`);
+        const inputs = { script };
+        const sceneId = text(value.sceneId, 140);
+        if (sceneId) {
+            if (!OPAQUE_ID_PATTERN.test(sceneId)) {
+                throw new CreatorWorkflowError('invalid_workflow_node', `Node ${index + 1} has an invalid scene reference.`);
+            }
+            inputs.sceneId = sceneId;
+        }
+        return inputs;
+    }
+
     const prompt = text(value.prompt, 4000);
     if (!prompt) throw new CreatorWorkflowError('invalid_workflow_node', `Node ${index + 1} requires a prompt.`);
     const aspectRatio = ASPECT_RATIOS.has(value.aspectRatio) ? value.aspectRatio : '16:9';
@@ -208,6 +231,7 @@ function isRetryablePollFailure(result) {
 }
 
 function providerKindFor(node) {
+    if (node.kind === 'avatar.generate') return 'avatar';
     return node.kind === 'image.generate' ? 'image' : 'video';
 }
 
@@ -231,6 +255,9 @@ async function submitNode(node, resolvedInputs, { env, fetchImpl }) {
             aspectRatio: resolvedInputs.aspectRatio,
         }, { env, fetchImpl });
     }
+    if (node.kind === 'avatar.generate') {
+        return createHeyGenAvatarVideoJob({ script: resolvedInputs.script }, { env, fetchImpl });
+    }
     return createMuapiVideoJob({
         prompt: resolvedInputs.prompt,
         aspectRatio: resolvedInputs.aspectRatio,
@@ -240,11 +267,31 @@ async function submitNode(node, resolvedInputs, { env, fetchImpl }) {
 }
 
 async function pollNode(node, { env, fetchImpl }) {
+    if (node.kind === 'avatar.generate') {
+        return getHeyGenAvatarVideoJob(node.jobId, { env, fetchImpl });
+    }
     return getMuapiGenerationJob(node.jobId, node.providerKind || providerKindFor(node), { env, fetchImpl });
 }
 
+// The job shape differs by provider (MuAPI's `url`/`model`/`keyMode` vs.
+// HeyGen's `videoUrl`); this is the one place that difference is resolved
+// into the single normalized shape buildAssetRecord expects.
+function jobOutputUrl(node, job) {
+    return node.kind === 'avatar.generate' ? job.videoUrl : job.url;
+}
+
+function jobIsComplete(node, job) {
+    return job.status === 'completed' && Boolean(jobOutputUrl(node, job));
+}
+
+function jobFailureMessage(node, job) {
+    if (node.kind === 'avatar.generate') return job.error?.message || 'Generation failed.';
+    return job.error || 'Generation failed.';
+}
+
 function buildAssetRecord(job, node, project, { idGenerator, now, env }) {
-    const url = safeCreatorAssetUrl(job.url, { env });
+    const url = safeCreatorAssetUrl(jobOutputUrl(node, job), { env });
+    const isAvatar = node.kind === 'avatar.generate';
     return {
         id: idGenerator(),
         projectId: project.id,
@@ -256,10 +303,10 @@ function buildAssetRecord(job, node, project, { idGenerator, now, env }) {
         mimeType: null,
         size: 0,
         provider: {
-            provider: 'muapi',
-            model: job.model || null,
+            provider: isAvatar ? 'heygen' : 'muapi',
+            model: (isAvatar ? null : job.model) || null,
             requestId: job.jobId || null,
-            keyMode: job.keyMode || null,
+            keyMode: (isAvatar ? null : job.keyMode) || null,
         },
         createdAt: iso(now),
     };
@@ -442,11 +489,11 @@ export async function advanceWorkflowRun(user, projectId, runId, options = {}) {
                 };
             }
             const job = result.job;
-            if (job.status === 'completed' && job.url) {
+            if (jobIsComplete(node, job)) {
                 return completeNode({ run, nodeIndex, node, job, project, idGenerator: ctx.idGenerator, now, env });
             }
             if (job.status === 'failed') {
-                const updatedNode = { ...node, status: 'failed', error: job.error || 'Generation failed.', completedAt: iso(now) };
+                const updatedNode = { ...node, status: 'failed', error: jobFailureMessage(node, job), completedAt: iso(now) };
                 return {
                     reason: 'node_failed',
                     run: { ...run, status: 'failed', nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
@@ -491,7 +538,7 @@ export async function advanceWorkflowRun(user, projectId, runId, options = {}) {
         }
 
         const job = result.job;
-        if (job.status === 'completed' && job.url) {
+        if (jobIsComplete(node, job)) {
             return completeNode({ run, nodeIndex, node, job, project, idGenerator, now, env });
         }
         const updatedNode = {

@@ -23,6 +23,9 @@ const env = {
     CREATOR_SESSION_SECRET: 'creator-workflow-test-secret-that-is-longer-than-thirty-two-characters',
     MUAPI_KEY_MODE: 'sandbox',
     MUAPI_API_KEY: 'sandbox-key-that-is-long-enough',
+    HEYGEN_API_KEY: 'heygen-key-that-is-long-enough',
+    HEYGEN_AVATAR_ID: 'avatar-1',
+    HEYGEN_VOICE_ID: 'voice-1',
 };
 const owner = { id: 12345678, login: 'lalambert1982-eng' };
 const otherOwner = { id: 87654321, login: 'other-owner' };
@@ -591,4 +594,145 @@ test('a 429 (rate limit or exhausted balance) fails the poll immediately rather 
     const polled = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: rejected.fetchImpl, now: Date.UTC(2026, 0, 5) });
     assert.equal(polled.run.nodes[0].status, 'failed');
     assert.equal(rejected.counts().pollCalls, 1);
+});
+
+// HeyGen's create response never carries the finished video (only a job ID and
+// a queued/processing status) and its job shape uses `videoUrl`/structured
+// `error: {code, message}` instead of MuAPI's `url`/plain-string `error` — so
+// submission and completion are always two separate fetch calls here, unlike
+// the MuAPI mocks above where a single mocked response can already be
+// "succeeded".
+function heygenFetch({ pollStatus = 'completed', pollStatusCode = 200, failureStatus, submitStatusCode = 200 } = {}) {
+    let submitCalls = 0;
+    let pollCalls = 0;
+    return {
+        fetchImpl: async (url, options = {}) => {
+            if (options.method === 'POST') {
+                submitCalls += 1;
+                return {
+                    ok: submitStatusCode < 400,
+                    status: submitStatusCode,
+                    text: async () => JSON.stringify({ data: { video_id: 'heygen-job-1', status: 'processing' } }),
+                };
+            }
+            pollCalls += 1;
+            if (failureStatus) {
+                return {
+                    ok: false,
+                    status: failureStatus,
+                    text: async () => JSON.stringify({ error: { message: 'temporary upstream error' } }),
+                };
+            }
+            return {
+                ok: pollStatusCode < 400,
+                status: pollStatusCode,
+                text: async () => JSON.stringify({
+                    data: pollStatus === 'failed'
+                        ? { status: 'failed', failure_message: 'Avatar rendering failed.', failure_code: 'render_failed' }
+                        : { status: pollStatus, video_url: `https://resource.heygen.ai/out-${pollCalls}.mp4` },
+                }),
+            };
+        },
+        counts: () => ({ submitCalls, pollCalls }),
+    };
+}
+
+test('an avatar.generate node submits a script to HeyGen and registers a heygen-provider video asset on completion', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    const { run } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [{ kind: 'avatar.generate', script: 'Welcome to the launch of our new product.' }],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+    assert.equal(run.nodes[0].inputs.script, 'Welcome to the launch of our new product.');
+
+    const heygen = heygenFetch();
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: heygen.fetchImpl, now: Date.UTC(2026, 0, 3) });
+    const submitted = await approveAndAdvanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: heygen.fetchImpl, now: Date.UTC(2026, 0, 4) });
+    assert.equal(submitted.run.nodes[0].status, 'running');
+    assert.equal(submitted.run.nodes[0].jobId, 'heygen-job-1');
+    assert.equal(heygen.counts().submitCalls, 1);
+
+    const finished = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: heygen.fetchImpl, now: Date.UTC(2026, 0, 5) });
+    assert.equal(finished.run.nodes[0].status, 'completed');
+    assert.equal(finished.run.nodes[0].outputUrl, 'https://resource.heygen.ai/out-1.mp4');
+    assert.equal(finished.project.assets.length, 1);
+    assert.equal(finished.project.assets[0].type, 'video');
+    assert.equal(finished.project.assets[0].provider.provider, 'heygen');
+    assert.equal(heygen.counts().submitCalls, 1, 'completion must never trigger a second paid submission');
+});
+
+test('a node requires a non-empty script for avatar.generate', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    await assert.rejects(
+        createWorkflowRun(owner, projectAId, {
+            source: 'manual',
+            nodes: [{ kind: 'avatar.generate', script: '   ' }],
+        }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) }),
+        (error) => error instanceof CreatorWorkflowError && error.code === 'invalid_workflow_node',
+    );
+});
+
+test('a failed HeyGen render surfaces the structured failure_message, not a generic error', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    const { run } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [{ kind: 'avatar.generate', script: 'a script that will fail to render' }],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+
+    const heygen = heygenFetch({ pollStatus: 'failed' });
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: heygen.fetchImpl, now: Date.UTC(2026, 0, 3) });
+    await approveAndAdvanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: heygen.fetchImpl, now: Date.UTC(2026, 0, 4) });
+
+    const failed = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: heygen.fetchImpl, now: Date.UTC(2026, 0, 5) });
+    assert.equal(failed.run.nodes[0].status, 'failed');
+    assert.equal(failed.run.nodes[0].error, 'Avatar rendering failed.');
+    assert.equal(failed.project.assets.length, 0);
+});
+
+test('a transient HeyGen poll failure (502) keeps an avatar.generate node running instead of failing it', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    const { run } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [{ kind: 'avatar.generate', script: 'a script with a flaky poll' }],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+
+    const heygen = heygenFetch({ failureStatus: 502 });
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: heygen.fetchImpl, now: Date.UTC(2026, 0, 3) });
+    await approveAndAdvanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: heygen.fetchImpl, now: Date.UTC(2026, 0, 4) });
+
+    const afterFailedPoll = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: heygen.fetchImpl, now: Date.UTC(2026, 0, 5) });
+    assert.equal(afterFailedPoll.run.nodes[0].status, 'running', 'a transient HeyGen poll error must not fail the node');
+    assert.equal(afterFailedPoll.run.nodes[0].pollFailures, 1);
+    assert.equal(heygen.counts().submitCalls, 1);
+});
+
+test('a rejected HeyGen credential (401) fails an avatar.generate node immediately rather than retrying', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    const { run } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [{ kind: 'avatar.generate', script: 'a script rejected for bad credentials' }],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+
+    const heygen = heygenFetch({ failureStatus: 401 });
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: heygen.fetchImpl, now: Date.UTC(2026, 0, 3) });
+    await approveAndAdvanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: heygen.fetchImpl, now: Date.UTC(2026, 0, 4) });
+
+    const failed = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: heygen.fetchImpl, now: Date.UTC(2026, 0, 5) });
+    assert.equal(failed.run.nodes[0].status, 'failed', 'a rejected credential must never be treated as a transient network blip');
+    assert.equal(heygen.counts().pollCalls, 1);
 });
