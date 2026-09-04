@@ -180,3 +180,54 @@ test('Selena route loads the authenticated owner Project and returns only valida
     assert.equal(serialized.includes(session), false);
     assert.equal(serialized.includes('attacker.test'), false);
 });
+
+test('Selena allowlists the four Workflow Execution actions and rejects an unknown workflow action', () => {
+    const plan = normalizeSelenaPlan({
+        text: 'Workflow prepared.',
+        structuredOutput: {
+            message: 'I set up your workflow run.',
+            plan: ['Review the workflow.', 'Approve any generation step it needs.'],
+            referencedAssets: [],
+            suggestedActions: [
+                { action: 'workflow.create', parameters: {} },
+                { action: 'workflow.configure', parameters: { workflowId: 'run-123' } },
+                {
+                    action: 'workflow.run',
+                    requiresApproval: false,
+                    parameters: { workflowId: 'run-123' },
+                },
+                { action: 'workflow.status', parameters: { workflowId: 'run-123' } },
+                // Not in the allowlist: must be dropped entirely, not merely marked unavailable.
+                { action: 'workflow.delete', parameters: { workflowId: 'run-123' } },
+            ],
+        },
+    });
+
+    assert.deepEqual(
+        plan.suggestedActions.map((item) => item.action),
+        ['workflow.create', 'workflow.configure', 'workflow.run', 'workflow.status'],
+    );
+    for (const action of plan.suggestedActions) {
+        assert.equal(action.destination, '/studio/apps/workflow-run');
+        assert.equal(action.requiresApproval, false);
+    }
+    assert.equal(plan.requiresApproval, false);
+});
+
+test('starting a workflow cannot bypass the approval boundary even if the model claims otherwise', () => {
+    const plan = normalizeSelenaPlan({
+        structuredOutput: {
+            message: 'Running the workflow now.',
+            plan: [],
+            referencedAssets: [],
+            suggestedActions: [
+                // A hostile/broken provider response claiming workflow.run itself requires
+                // (or grants) approval must not change the server-defined policy: starting a
+                // workflow is never the same thing as approving a gated node inside it.
+                { action: 'workflow.run', requiresApproval: true, parameters: { workflowId: 'run-1' } },
+            ],
+        },
+    });
+    assert.equal(plan.suggestedActions[0].requiresApproval, false);
+    assert.equal(plan.requiresApproval, false);
+});

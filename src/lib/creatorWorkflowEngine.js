@@ -1,0 +1,677 @@
+import { randomUUID } from 'node:crypto';
+
+import { storyboardToTimeline } from './creatorTimeline.js';
+import {
+    CreatorProjectError,
+    MAX_ASSETS,
+    mutateCreatorProject,
+    safeCreatorAssetUrl,
+} from './creatorProjectStore.js';
+import {
+    createMuapiImageJob,
+    createMuapiVideoJob,
+    getMuapiGenerationJob,
+} from './muapiCreatorProvider.js';
+import {
+    createHeyGenAvatarVideoJob,
+    getHeyGenAvatarVideoJob,
+} from './heygenProvider.js';
+
+// Workflow Execution V1 is an execution layer over the existing Creator Project /
+// Asset system. It intentionally reuses the same Blob-backed project record
+// (mutateCreatorProject) and the same async job primitives already used by the
+// direct image/video/avatar tools (createMuapiImageJob/createMuapiVideoJob/
+// getMuapiGenerationJob/createHeyGenAvatarVideoJob/getHeyGenAvatarVideoJob)
+// instead of introducing a new orchestration framework.
+//
+// Node kinds cover the MuAPI image/video job family plus HeyGen avatar video,
+// all of which share the same async submit-then-poll-a-jobId-to-a-URL shape.
+// ElevenLabs and OpenAI return raw binary payloads instead of a hosted URL, so
+// they don't fit this shape without adding a server-side asset upload step —
+// that remains future work, not a stub started here.
+export const WORKFLOW_RUN_STATUSES = Object.freeze([
+    'queued',
+    'running',
+    'waiting_for_approval',
+    'completed',
+    'failed',
+    'cancelled',
+]);
+
+export const WORKFLOW_NODE_STATUSES = Object.freeze([
+    'pending',
+    'waiting_for_approval',
+    'running',
+    'completed',
+    'failed',
+]);
+
+const TERMINAL_WORKFLOW_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+
+// Shared by both run creation and node retry, since retrying a failed run
+// reactivates it (failed -> running) exactly like creating a new one does —
+// both must be checked against the same cap so neither path can push a
+// Project's in-flight run count past MAX_WORKFLOW_RUNS.
+function countActiveRuns(runs, excludeRunId = null) {
+    return runs.filter((run) => run.id !== excludeRunId && !TERMINAL_WORKFLOW_RUN_STATUSES.has(run.status)).length;
+}
+
+const WORKFLOW_NODE_KINDS = new Set(['image.generate', 'video.generate', 'video.animate', 'avatar.generate']);
+const ASPECT_RATIOS = new Set(['16:9', '9:16', '1:1']);
+const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,139}$/;
+
+export const MAX_WORKFLOW_RUNS = 20;
+const MAX_WORKFLOW_NODES = 20;
+// Consecutive poll-request failures (network/timeout/rate-limit/momentary
+// provider error) tolerated before a node is actually marked failed. A poll
+// failing does not mean the underlying job failed, so this must stay well
+// short of "immediately fail" to avoid ever orphaning a still-running job.
+const MAX_TRANSIENT_POLL_FAILURES = 5;
+
+export class CreatorWorkflowError extends CreatorProjectError {
+    constructor(code, message, status = 400) {
+        super(code, message, status);
+        this.name = 'CreatorWorkflowError';
+    }
+}
+
+function text(value, maximum) {
+    return typeof value === 'string' ? value.trim().slice(0, maximum) : '';
+}
+
+function boundedInteger(value, fallback, minimum, maximum) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(maximum, Math.max(minimum, Math.round(parsed)));
+}
+
+function iso(now) {
+    return new Date(now).toISOString();
+}
+
+function replaceAt(list, index, value) {
+    const next = list.slice();
+    next[index] = value;
+    return next;
+}
+
+function normalizeNodeInput(kind, source, index) {
+    const value = source && typeof source === 'object' && !Array.isArray(source) ? source : {};
+
+    if (kind === 'avatar.generate') {
+        // HeyGen has its own full validation (normalizeHeyGenScriptInput) that
+        // createHeyGenAvatarVideoJob already runs before submission; this only
+        // needs to catch an empty script early with a node-scoped error.
+        const script = text(value.script, 5000);
+        if (!script) throw new CreatorWorkflowError('invalid_workflow_node', `Node ${index + 1} requires a script.`);
+        const inputs = { script };
+        const sceneId = text(value.sceneId, 140);
+        if (sceneId) {
+            if (!OPAQUE_ID_PATTERN.test(sceneId)) {
+                throw new CreatorWorkflowError('invalid_workflow_node', `Node ${index + 1} has an invalid scene reference.`);
+            }
+            inputs.sceneId = sceneId;
+        }
+        return inputs;
+    }
+
+    const prompt = text(value.prompt, 4000);
+    if (!prompt) throw new CreatorWorkflowError('invalid_workflow_node', `Node ${index + 1} requires a prompt.`);
+    const aspectRatio = ASPECT_RATIOS.has(value.aspectRatio) ? value.aspectRatio : '16:9';
+    const inputs = { prompt, aspectRatio };
+    if (kind === 'video.generate' || kind === 'video.animate') {
+        inputs.duration = boundedInteger(value.duration, 5, 3, 12);
+    }
+    if (kind === 'video.animate') {
+        const sourceNodeIndex = Number(value.sourceNodeIndex);
+        if (!Number.isInteger(sourceNodeIndex) || sourceNodeIndex < 0 || sourceNodeIndex >= index) {
+            throw new CreatorWorkflowError(
+                'invalid_workflow_node',
+                `Node ${index + 1} must reference an earlier node in this run as its image source.`,
+            );
+        }
+        inputs.sourceNodeIndex = sourceNodeIndex;
+    }
+    const sceneId = text(value.sceneId, 140);
+    if (sceneId) {
+        if (!OPAQUE_ID_PATTERN.test(sceneId)) {
+            throw new CreatorWorkflowError('invalid_workflow_node', `Node ${index + 1} has an invalid scene reference.`);
+        }
+        inputs.sceneId = sceneId;
+    }
+    return inputs;
+}
+
+function buildNode(kind, source, index, { idGenerator, now }) {
+    const normalizedKind = text(kind, 40);
+    if (!WORKFLOW_NODE_KINDS.has(normalizedKind)) {
+        throw new CreatorWorkflowError('invalid_workflow_node', `Node ${index + 1} has an unsupported kind.`);
+    }
+    const inputs = normalizeNodeInput(normalizedKind, source, index);
+    return {
+        id: idGenerator(),
+        kind: normalizedKind,
+        label: text(source?.label, 120) || `Step ${index + 1}`,
+        inputs,
+        status: 'pending',
+        approved: false,
+        jobId: null,
+        providerKind: null,
+        pollFailures: 0,
+        outputAssetId: null,
+        outputUrl: null,
+        error: null,
+        startedAt: null,
+        completedAt: null,
+        createdAt: iso(now),
+    };
+}
+
+function buildRun({ projectId, name, nodesInput, source, idGenerator, now }) {
+    if (!Array.isArray(nodesInput) || nodesInput.length === 0) {
+        throw new CreatorWorkflowError('invalid_workflow_input', 'A workflow run requires at least one node.');
+    }
+    if (nodesInput.length > MAX_WORKFLOW_NODES) {
+        throw new CreatorWorkflowError('invalid_workflow_input', `A workflow run supports at most ${MAX_WORKFLOW_NODES} nodes.`);
+    }
+    const nodes = nodesInput.map((nodeInput, index) => buildNode(nodeInput?.kind, nodeInput, index, { idGenerator, now }));
+    nodes.forEach((node, index) => {
+        if (node.kind !== 'video.animate') return;
+        const source = nodes[node.inputs.sourceNodeIndex];
+        if (!source || source.kind !== 'image.generate') {
+            throw new CreatorWorkflowError(
+                'invalid_workflow_node',
+                `Node ${index + 1} must reference an image.generate node as its image source.`,
+            );
+        }
+    });
+    const timestamp = iso(now);
+    return {
+        id: idGenerator(),
+        projectId,
+        name: text(name, 100) || 'Untitled Workflow',
+        status: 'queued',
+        source: source === 'storyboard' ? 'storyboard' : 'manual',
+        currentNodeIndex: 0,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        nodes,
+    };
+}
+
+function buildWorkflowRunFromStoryboardScenes(project, { sceneIds, name } = {}, { idGenerator, now }) {
+    const scenes = Array.isArray(project?.storyboard?.scenes) ? project.storyboard.scenes : [];
+    const requested = Array.isArray(sceneIds) && sceneIds.length
+        ? new Set(sceneIds.map((id) => text(id, 140)))
+        : null;
+    const selected = requested ? scenes.filter((scene) => requested.has(scene.id)) : scenes;
+    if (selected.length === 0) {
+        throw new CreatorWorkflowError('invalid_workflow_input', 'The Storyboard has no scenes available to build a workflow from.');
+    }
+    // Do not silently drop scenes past the run limit — buildRun's own node-count
+    // check below rejects an over-long selection with a visible error instead,
+    // so a 35-scene storyboard run either includes all of them or fails clearly,
+    // never quietly executes only the first 20.
+    const nodesInput = selected.map((scene) => ({
+        kind: 'image.generate',
+        label: text(scene.title, 120),
+        prompt: scene.prompt,
+        aspectRatio: scene.aspectRatio,
+        sceneId: scene.id,
+    }));
+    return buildRun({
+        projectId: project.id,
+        name: name || 'Storyboard Workflow',
+        nodesInput,
+        source: 'storyboard',
+        idGenerator,
+        now,
+    });
+}
+
+// muapiCreatorProvider.js normalizes every failure into a small set of HTTP
+// status codes, which on their own are ambiguous: a 502 covers both a
+// genuine network hiccup AND a rejected API credential, and a 429 covers both
+// transient rate-limiting AND an exhausted account balance — none of which
+// will resolve by repeating the identical poll. Rather than guess from the
+// collapsed status code, this reads the `retryable` flag the failure was
+// tagged with at its source, where the real distinction is still known.
+function isRetryablePollFailure(result) {
+    return result.retryable === true;
+}
+
+function providerKindFor(node) {
+    if (node.kind === 'avatar.generate') return 'avatar';
+    return node.kind === 'image.generate' ? 'image' : 'video';
+}
+
+function resolveNodeInputs(node, run) {
+    if (node.kind !== 'video.animate') return node.inputs;
+    const source = run.nodes[node.inputs.sourceNodeIndex];
+    if (!source || source.status !== 'completed' || !source.outputUrl) {
+        throw new CreatorWorkflowError(
+            'missing_upstream_output',
+            'The upstream node output required for this step is not ready yet.',
+            409,
+        );
+    }
+    return { ...node.inputs, firstFrameUrl: source.outputUrl };
+}
+
+async function submitNode(node, resolvedInputs, { env, fetchImpl }) {
+    if (node.kind === 'image.generate') {
+        return createMuapiImageJob({
+            prompt: resolvedInputs.prompt,
+            aspectRatio: resolvedInputs.aspectRatio,
+        }, { env, fetchImpl });
+    }
+    if (node.kind === 'avatar.generate') {
+        return createHeyGenAvatarVideoJob({ script: resolvedInputs.script }, { env, fetchImpl });
+    }
+    return createMuapiVideoJob({
+        prompt: resolvedInputs.prompt,
+        aspectRatio: resolvedInputs.aspectRatio,
+        duration: resolvedInputs.duration,
+        firstFrameUrl: resolvedInputs.firstFrameUrl || undefined,
+    }, { env, fetchImpl });
+}
+
+async function pollNode(node, { env, fetchImpl }) {
+    if (node.kind === 'avatar.generate') {
+        return getHeyGenAvatarVideoJob(node.jobId, { env, fetchImpl });
+    }
+    return getMuapiGenerationJob(node.jobId, node.providerKind || providerKindFor(node), { env, fetchImpl });
+}
+
+// The job shape differs by provider (MuAPI's `url`/`model`/`keyMode` vs.
+// HeyGen's `videoUrl`); this is the one place that difference is resolved
+// into the single normalized shape buildAssetRecord expects.
+function jobOutputUrl(node, job) {
+    return node.kind === 'avatar.generate' ? job.videoUrl : job.url;
+}
+
+function jobIsComplete(node, job) {
+    return job.status === 'completed' && Boolean(jobOutputUrl(node, job));
+}
+
+function jobFailureMessage(node, job) {
+    if (node.kind === 'avatar.generate') return job.error?.message || 'Generation failed.';
+    return job.error || 'Generation failed.';
+}
+
+function buildAssetRecord(job, node, project, { idGenerator, now, env }) {
+    const url = safeCreatorAssetUrl(jobOutputUrl(node, job), { env });
+    const isAvatar = node.kind === 'avatar.generate';
+    return {
+        id: idGenerator(),
+        projectId: project.id,
+        type: node.kind === 'image.generate' ? 'image' : 'video',
+        title: node.label || 'Workflow output',
+        url,
+        storagePath: null,
+        source: 'workflow',
+        mimeType: null,
+        size: 0,
+        provider: {
+            provider: isAvatar ? 'heygen' : 'muapi',
+            model: (isAvatar ? null : job.model) || null,
+            requestId: job.jobId || null,
+            keyMode: (isAvatar ? null : job.keyMode) || null,
+        },
+        createdAt: iso(now),
+    };
+}
+
+function findRunIndex(project, runId) {
+    const runs = Array.isArray(project.workflowRuns) ? project.workflowRuns : [];
+    const index = runs.findIndex((item) => item.id === runId);
+    if (index === -1) throw new CreatorWorkflowError('workflow_not_found', 'Workflow run was not found.', 404);
+    return { runs, index };
+}
+
+export function findWorkflowRun(project, runId) {
+    const runs = Array.isArray(project?.workflowRuns) ? project.workflowRuns : [];
+    return runs.find((item) => item.id === runId) || null;
+}
+
+export async function createWorkflowRun(user, projectId, input = {}, options = {}) {
+    const { idGenerator = randomUUID, now = Date.now() } = options;
+    const runId = idGenerator();
+    let createdRun = null;
+    const project = await mutateCreatorProject(user, projectId, (proj) => {
+        const runs = Array.isArray(proj.workflowRuns) ? proj.workflowRuns : [];
+        // Only runs still in flight count against the cap — a completed, failed,
+        // or cancelled run is no longer consuming anything and must not
+        // permanently block a Project from ever starting another one. The
+        // Project's overall 1 MB storage ceiling (enforced on every write in
+        // creatorProjectStore.js) is what actually bounds unlimited terminal-run
+        // history, not this count.
+        if (countActiveRuns(runs) >= MAX_WORKFLOW_RUNS) {
+            throw new CreatorWorkflowError('workflow_limit', `A Project supports at most ${MAX_WORKFLOW_RUNS} active workflow runs at once.`, 409);
+        }
+        const run = input.source === 'storyboard'
+            ? buildWorkflowRunFromStoryboardScenes(proj, input, { idGenerator, now })
+            : buildRun({
+                projectId: proj.id,
+                name: input.name,
+                nodesInput: input.nodes,
+                source: input.source,
+                idGenerator,
+                now,
+            });
+        // Pin the pre-generated runId so the caller can find this run after the
+        // mutation resolves, regardless of which builder produced it.
+        run.id = runId;
+        createdRun = run;
+        return { workflowRuns: [run, ...runs] };
+    }, options);
+    return { project, run: createdRun || findWorkflowRun(project, runId) };
+}
+
+async function step(user, projectId, runId, transition, options = {}) {
+    const { env = process.env, fetchImpl = fetch, idGenerator = randomUUID, now = Date.now() } = options;
+    let outcome = { changed: false, reason: null };
+    const project = await mutateCreatorProject(user, projectId, async (proj) => {
+        const { runs, index } = findRunIndex(proj, runId);
+        const run = runs[index];
+        const result = await transition(run, proj, { env, fetchImpl, idGenerator, now });
+        if (!result) {
+            outcome = { changed: false, reason: 'no_change', run };
+            return null;
+        }
+        outcome = { changed: true, reason: result.reason, run: result.run };
+        const patch = { workflowRuns: replaceAt(runs, index, result.run) };
+        if (result.asset) {
+            const assets = Array.isArray(proj.assets) ? proj.assets : [];
+            if (assets.length >= MAX_ASSETS) {
+                throw new CreatorWorkflowError('asset_limit', `A Project supports at most ${MAX_ASSETS} Assets.`, 409);
+            }
+            patch.assets = [result.asset, ...assets];
+        }
+        if (result.storyboardSceneUpdate) {
+            // Written atomically with the asset above, in the same Project
+            // write, rather than as a separate client-triggered save — a
+            // completed scene node can never register its asset while failing
+            // (or racing) to write the scene URL back.
+            const { sceneId, url, isVideo } = result.storyboardSceneUpdate;
+            const scenes = Array.isArray(proj.storyboard?.scenes) ? proj.storyboard.scenes : [];
+            const sceneIndex = scenes.findIndex((scene) => scene.id === sceneId);
+            if (sceneIndex !== -1) {
+                const updatedScene = {
+                    ...scenes[sceneIndex],
+                    imageUrl: isVideo ? scenes[sceneIndex].imageUrl : url,
+                    videoUrl: isVideo ? url : scenes[sceneIndex].videoUrl,
+                    status: 'ready',
+                    error: '',
+                };
+                patch.storyboard = { ...proj.storyboard, scenes: replaceAt(scenes, sceneIndex, updatedScene) };
+            }
+            // A scene the user has since deleted is not an error: the asset is
+            // still registered in Project Assets either way.
+        }
+        if (result.asset || result.storyboardSceneUpdate) {
+            patch.timeline = storyboardToTimeline(patch.storyboard || proj.storyboard, patch.assets || proj.assets);
+        }
+        return patch;
+    }, options);
+    const run = outcome.run || findWorkflowRun(project, runId);
+    return { project, run, changed: outcome.changed, reason: outcome.reason };
+}
+
+export async function advanceWorkflowRun(user, projectId, runId, options = {}) {
+    // Phase 1: a pure, synchronous state transition (no provider call). If the
+    // current node is pending and approved, this only *announces* the intent
+    // to submit it — marking it "running" — and hands the resolved inputs back
+    // to the caller. The actual provider call happens in phase 2, as a second,
+    // independent transaction. Recording intent first means a write failure
+    // after a successful provider call leaves a node visibly stuck in
+    // "running" with no jobId (which the next poll attempt fails cleanly,
+    // requiring a retry) instead of silently resubmitting a duplicate paid job
+    // on the very next advance() call.
+    let announcedSubmission = null;
+    const phase1 = await step(user, projectId, runId, async (run, project, ctx) => {
+        const { env, fetchImpl, now } = ctx;
+        if (!['queued', 'running'].includes(run.status)) return null;
+
+        if (run.currentNodeIndex >= run.nodes.length) {
+            return { reason: 'run_completed', run: { ...run, status: 'completed', updatedAt: iso(now) } };
+        }
+
+        const nodeIndex = run.currentNodeIndex;
+        const node = run.nodes[nodeIndex];
+
+        if (node.status === 'pending') {
+            if (!node.approved) {
+                const updatedNode = { ...node, status: 'waiting_for_approval' };
+                return {
+                    reason: 'approval_required',
+                    run: { ...run, status: 'waiting_for_approval', nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
+                };
+            }
+
+            let resolvedInputs;
+            try {
+                resolvedInputs = resolveNodeInputs(node, run);
+            } catch (resolveError) {
+                const updatedNode = { ...node, status: 'failed', error: resolveError.message, completedAt: iso(now) };
+                return {
+                    reason: 'node_failed',
+                    run: { ...run, status: 'failed', nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
+                };
+            }
+
+            announcedSubmission = { nodeIndex, resolvedInputs };
+            const updatedNode = { ...node, status: 'running', startedAt: iso(now) };
+            return {
+                reason: 'node_submitting',
+                run: { ...run, status: 'running', nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
+            };
+        }
+
+        if (node.status === 'running') {
+            // Either genuinely awaiting the provider (has a jobId — poll it),
+            // or a prior submission was announced but never finalized (no
+            // jobId — this fails cleanly rather than re-submitting).
+            if (!node.jobId) {
+                const updatedNode = { ...node, status: 'failed', error: 'The generation request was interrupted before it could be confirmed. Retry this step.', completedAt: iso(now) };
+                return {
+                    reason: 'node_failed',
+                    run: { ...run, status: 'failed', nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
+                };
+            }
+            const result = await pollNode(node, { env, fetchImpl });
+            if (!result.ok) {
+                // A poll request failing (network blip, timeout, rate limit,
+                // a momentary provider 5xx) does not mean the job itself
+                // failed — it means we couldn't check. Failing the node here
+                // would orphan the already-submitted (possibly still
+                // succeeding) jobId, and a retry would then submit a second
+                // paid job for the same step. Keep the node "running" with
+                // the same jobId and retry the poll, only giving up and
+                // surfacing a visible failure after repeated consecutive
+                // poll failures.
+                const attempts = (node.pollFailures || 0) + 1;
+                if (isRetryablePollFailure(result) && attempts < MAX_TRANSIENT_POLL_FAILURES) {
+                    const updatedNode = { ...node, pollFailures: attempts };
+                    return {
+                        reason: 'node_poll_retry',
+                        run: { ...run, nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
+                    };
+                }
+                const updatedNode = { ...node, status: 'failed', error: result.error || 'Provider error.', completedAt: iso(now) };
+                return {
+                    reason: 'node_failed',
+                    run: { ...run, status: 'failed', nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
+                };
+            }
+            const job = result.job;
+            if (jobIsComplete(node, job)) {
+                return completeNode({ run, nodeIndex, node, job, project, idGenerator: ctx.idGenerator, now, env });
+            }
+            if (job.status === 'failed') {
+                const updatedNode = { ...node, status: 'failed', error: jobFailureMessage(node, job), completedAt: iso(now) };
+                return {
+                    reason: 'node_failed',
+                    run: { ...run, status: 'failed', nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
+                };
+            }
+            // Still processing. A successful poll (even with no terminal
+            // status yet) proves the job is reachable, so clear any
+            // accumulated transient-failure count.
+            if (node.pollFailures) {
+                const updatedNode = { ...node, pollFailures: 0 };
+                return {
+                    reason: 'node_poll_progress',
+                    run: { ...run, nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
+                };
+            }
+            return null; // still processing; nothing to persist yet
+        }
+
+        // waiting_for_approval or failed nodes require an explicit approve/retry call.
+        return null;
+    }, options);
+
+    if (!announcedSubmission) return phase1;
+
+    // Phase 2: perform the already-announced provider submission, then
+    // finalize the result in its own transaction. Only finalizes if the node
+    // is still exactly where phase 1 left it, guarding against a concurrent
+    // cancel/retry landing in between.
+    const { nodeIndex, resolvedInputs } = announcedSubmission;
+    return step(user, projectId, runId, async (run, project, ctx) => {
+        const { env, fetchImpl, idGenerator, now } = ctx;
+        const node = run.nodes[nodeIndex];
+        if (!node || node.status !== 'running' || node.jobId) return null;
+
+        const result = await submitNode(node, resolvedInputs, { env, fetchImpl });
+        if (!result.ok) {
+            const updatedNode = { ...node, status: 'failed', error: result.error || 'Provider error.', completedAt: iso(now) };
+            return {
+                reason: 'node_failed',
+                run: { ...run, status: 'failed', nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
+            };
+        }
+
+        const job = result.job;
+        if (jobIsComplete(node, job)) {
+            return completeNode({ run, nodeIndex, node, job, project, idGenerator, now, env });
+        }
+        const updatedNode = {
+            ...node,
+            status: 'running',
+            jobId: job.jobId || null,
+            providerKind: job.kind || providerKindFor(node),
+        };
+        return {
+            reason: 'node_submitted',
+            run: { ...run, status: 'running', nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
+        };
+    }, options);
+}
+
+function completeNode({ run, nodeIndex, node, job, project, idGenerator, now, env }) {
+    let asset;
+    try {
+        asset = buildAssetRecord(job, node, project, { idGenerator, now, env });
+    } catch (urlError) {
+        const updatedNode = { ...node, status: 'failed', error: 'Provider returned an invalid output URL.', completedAt: iso(now) };
+        return {
+            reason: 'node_failed',
+            run: { ...run, status: 'failed', nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
+        };
+    }
+    const updatedNode = {
+        ...node,
+        status: 'completed',
+        outputAssetId: asset.id,
+        outputUrl: asset.url,
+        startedAt: node.startedAt || iso(now),
+        completedAt: iso(now),
+    };
+    const nextIndex = nodeIndex + 1;
+    const runCompleted = nextIndex >= run.nodes.length;
+    const result = {
+        reason: 'node_completed',
+        asset,
+        run: {
+            ...run,
+            status: runCompleted ? 'completed' : 'running',
+            currentNodeIndex: nextIndex,
+            nodes: replaceAt(run.nodes, nodeIndex, updatedNode),
+            updatedAt: iso(now),
+        },
+    };
+    if (node.inputs?.sceneId) {
+        result.storyboardSceneUpdate = {
+            sceneId: node.inputs.sceneId,
+            url: asset.url,
+            isVideo: node.kind !== 'image.generate',
+        };
+    }
+    return result;
+}
+
+export async function approveWorkflowNode(user, projectId, runId, options = {}) {
+    return step(user, projectId, runId, async (run, _project, { now }) => {
+        if (run.status !== 'waiting_for_approval') return null;
+        const nodeIndex = run.currentNodeIndex;
+        const node = run.nodes[nodeIndex];
+        if (!node || node.status !== 'waiting_for_approval') return null;
+        const updatedNode = { ...node, status: 'pending', approved: true };
+        return {
+            reason: 'node_approved',
+            run: { ...run, status: 'running', nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
+        };
+    }, options);
+}
+
+export async function approveAndAdvanceWorkflowRun(user, projectId, runId, options = {}) {
+    const approved = await approveWorkflowNode(user, projectId, runId, options);
+    if (!approved.changed) return approved;
+    return advanceWorkflowRun(user, projectId, runId, options);
+}
+
+export async function retryWorkflowNode(user, projectId, runId, options = {}) {
+    return step(user, projectId, runId, async (run, project, { now }) => {
+        if (run.status !== 'failed') return null;
+        // Retrying reactivates this run (failed -> running) exactly like
+        // creating a new one does, so it must be checked against the same
+        // active-run cap createWorkflowRun enforces — otherwise a Project could
+        // sit at the cap with new runs, then retry its way past it through
+        // already-failed ones.
+        const runs = Array.isArray(project.workflowRuns) ? project.workflowRuns : [];
+        if (countActiveRuns(runs, run.id) >= MAX_WORKFLOW_RUNS) {
+            throw new CreatorWorkflowError('workflow_limit', `A Project supports at most ${MAX_WORKFLOW_RUNS} active workflow runs at once.`, 409);
+        }
+        const nodeIndex = run.nodes.findIndex((node) => node.status === 'failed');
+        if (nodeIndex === -1) return null;
+        const node = run.nodes[nodeIndex];
+        // Completed nodes before this one are left untouched: retry never
+        // re-submits already-finished work.
+        const updatedNode = {
+            ...node,
+            status: 'pending',
+            error: null,
+            jobId: null,
+            providerKind: null,
+            pollFailures: 0,
+            startedAt: null,
+            completedAt: null,
+        };
+        return {
+            reason: 'node_retried',
+            run: { ...run, status: 'running', currentNodeIndex: nodeIndex, nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
+        };
+    }, options);
+}
+
+export async function cancelWorkflowRun(user, projectId, runId, options = {}) {
+    return step(user, projectId, runId, async (run, _project, { now }) => {
+        if (['completed', 'failed', 'cancelled'].includes(run.status)) return null;
+        return {
+            reason: 'run_cancelled',
+            run: { ...run, status: 'cancelled', updatedAt: iso(now) },
+        };
+    }, options);
+}
