@@ -48,6 +48,14 @@ export const WORKFLOW_NODE_STATUSES = Object.freeze([
 
 const TERMINAL_WORKFLOW_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 
+// Shared by both run creation and node retry, since retrying a failed run
+// reactivates it (failed -> running) exactly like creating a new one does —
+// both must be checked against the same cap so neither path can push a
+// Project's in-flight run count past MAX_WORKFLOW_RUNS.
+function countActiveRuns(runs, excludeRunId = null) {
+    return runs.filter((run) => run.id !== excludeRunId && !TERMINAL_WORKFLOW_RUN_STATUSES.has(run.status)).length;
+}
+
 const WORKFLOW_NODE_KINDS = new Set(['image.generate', 'video.generate', 'video.animate', 'avatar.generate']);
 const ASPECT_RATIOS = new Set(['16:9', '9:16', '1:1']);
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,139}$/;
@@ -338,8 +346,7 @@ export async function createWorkflowRun(user, projectId, input = {}, options = {
         // Project's overall 1 MB storage ceiling (enforced on every write in
         // creatorProjectStore.js) is what actually bounds unlimited terminal-run
         // history, not this count.
-        const activeRuns = runs.filter((run) => !TERMINAL_WORKFLOW_RUN_STATUSES.has(run.status)).length;
-        if (activeRuns >= MAX_WORKFLOW_RUNS) {
+        if (countActiveRuns(runs) >= MAX_WORKFLOW_RUNS) {
             throw new CreatorWorkflowError('workflow_limit', `A Project supports at most ${MAX_WORKFLOW_RUNS} active workflow runs at once.`, 409);
         }
         const run = input.source === 'storyboard'
@@ -626,8 +633,17 @@ export async function approveAndAdvanceWorkflowRun(user, projectId, runId, optio
 }
 
 export async function retryWorkflowNode(user, projectId, runId, options = {}) {
-    return step(user, projectId, runId, async (run, _project, { now }) => {
+    return step(user, projectId, runId, async (run, project, { now }) => {
         if (run.status !== 'failed') return null;
+        // Retrying reactivates this run (failed -> running) exactly like
+        // creating a new one does, so it must be checked against the same
+        // active-run cap createWorkflowRun enforces — otherwise a Project could
+        // sit at the cap with new runs, then retry its way past it through
+        // already-failed ones.
+        const runs = Array.isArray(project.workflowRuns) ? project.workflowRuns : [];
+        if (countActiveRuns(runs, run.id) >= MAX_WORKFLOW_RUNS) {
+            throw new CreatorWorkflowError('workflow_limit', `A Project supports at most ${MAX_WORKFLOW_RUNS} active workflow runs at once.`, 409);
+        }
         const nodeIndex = run.nodes.findIndex((node) => node.status === 'failed');
         if (nodeIndex === -1) return null;
         const node = run.nodes[nodeIndex];

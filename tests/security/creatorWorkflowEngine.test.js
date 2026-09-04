@@ -774,3 +774,42 @@ test('the workflow-run cap blocks piling up active runs but recovers once runs r
     const { run: recovered } = await createRun();
     assert.equal(recovered.status, 'queued');
 });
+
+test('retrying a failed run is blocked by the same active-run cap creating a new run is, not an escape hatch around it', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    // A failed run does not count against the cap on its own...
+    const { run: failedRun } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [{ kind: 'image.generate', prompt: 'a run that will fail' }],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+    await advanceWorkflowRun(owner, projectAId, failedRun.id, { env, blobStore, fetchImpl: failingFetch(), now: Date.UTC(2026, 0, 3) });
+    await approveAndAdvanceWorkflowRun(owner, projectAId, failedRun.id, { env, blobStore, fetchImpl: failingFetch(), now: Date.UTC(2026, 0, 4) });
+
+    // ...so a Project can still fill every slot with MAX_WORKFLOW_RUNS other
+    // active runs on top of it.
+    const activeRuns = [];
+    for (let i = 0; i < MAX_WORKFLOW_RUNS; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        const { run } = await createWorkflowRun(owner, projectAId, {
+            source: 'manual',
+            nodes: [{ kind: 'image.generate', prompt: 'an active run occupying a slot' }],
+        }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 5) });
+        activeRuns.push(run);
+    }
+
+    // Retrying the already-failed run would reactivate it back to "running",
+    // exceeding the cap exactly like creating a 21st run would — it must be
+    // rejected the same way, not silently allowed as a loophole.
+    await assert.rejects(
+        retryWorkflowNode(owner, projectAId, failedRun.id, { env, blobStore, now: Date.UTC(2026, 0, 6) }),
+        (error) => error instanceof CreatorWorkflowError && error.code === 'workflow_limit',
+    );
+
+    // Freeing a slot by cancelling one active run allows the retry to proceed.
+    await cancelWorkflowRun(owner, projectAId, activeRuns[0].id, { env, blobStore, now: Date.UTC(2026, 0, 7) });
+    const retried = await retryWorkflowNode(owner, projectAId, failedRun.id, { env, blobStore, now: Date.UTC(2026, 0, 8) });
+    assert.equal(retried.run.status, 'running');
+});
