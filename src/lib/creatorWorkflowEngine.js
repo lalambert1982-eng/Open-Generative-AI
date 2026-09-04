@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { storyboardToTimeline } from './creatorTimeline.js';
 import {
     CreatorProjectError,
+    MAX_ASSETS,
     mutateCreatorProject,
     safeCreatorAssetUrl,
 } from './creatorProjectStore.js';
@@ -46,9 +47,6 @@ const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,139}$/;
 
 const MAX_WORKFLOW_RUNS = 20;
 const MAX_WORKFLOW_NODES = 20;
-// Mirrors creatorProjectStore's own MAX_ASSETS cap; kept local so this module
-// doesn't need to reach into that file's private constants.
-const MAX_PROJECT_ASSETS = 500;
 
 export class CreatorWorkflowError extends CreatorProjectError {
     constructor(code, message, status = 400) {
@@ -138,6 +136,16 @@ function buildRun({ projectId, name, nodesInput, source, idGenerator, now }) {
         throw new CreatorWorkflowError('invalid_workflow_input', `A workflow run supports at most ${MAX_WORKFLOW_NODES} nodes.`);
     }
     const nodes = nodesInput.map((nodeInput, index) => buildNode(nodeInput?.kind, nodeInput, index, { idGenerator, now }));
+    nodes.forEach((node, index) => {
+        if (node.kind !== 'video.animate') return;
+        const source = nodes[node.inputs.sourceNodeIndex];
+        if (!source || source.kind !== 'image.generate') {
+            throw new CreatorWorkflowError(
+                'invalid_workflow_node',
+                `Node ${index + 1} must reference an image.generate node as its image source.`,
+            );
+        }
+    });
     const timestamp = iso(now);
     return {
         id: idGenerator(),
@@ -291,8 +299,8 @@ async function step(user, projectId, runId, transition, options = {}) {
         const patch = { workflowRuns: replaceAt(runs, index, result.run) };
         if (result.asset) {
             const assets = Array.isArray(proj.assets) ? proj.assets : [];
-            if (assets.length >= MAX_PROJECT_ASSETS) {
-                throw new CreatorWorkflowError('asset_limit', `A Project supports at most ${MAX_PROJECT_ASSETS} Assets.`, 409);
+            if (assets.length >= MAX_ASSETS) {
+                throw new CreatorWorkflowError('asset_limit', `A Project supports at most ${MAX_ASSETS} Assets.`, 409);
             }
             const nextAssets = [result.asset, ...assets];
             patch.assets = nextAssets;

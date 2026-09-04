@@ -182,6 +182,23 @@ test('retry resubmits only the failed node and never duplicates already-complete
     assert.equal(succeeded.project.assets.length, 2, 'retry must not duplicate the already-registered first asset');
 });
 
+test('a video.animate node must reference an image.generate node as its source, not another video node', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    await assert.rejects(
+        createWorkflowRun(owner, projectAId, {
+            source: 'manual',
+            nodes: [
+                { kind: 'video.generate', prompt: 'an establishing shot' },
+                { kind: 'video.animate', prompt: 'continue the motion', sourceNodeIndex: 0 },
+            ],
+        }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) }),
+        (error) => error instanceof CreatorWorkflowError && error.code === 'invalid_workflow_node',
+    );
+});
+
 test('a run can be cancelled while active or paused, and a cancelled run never resumes', async () => {
     const blobStore = creatorProjectStoreForTests(new Map());
     await setupProject(projectAId, owner, blobStore);

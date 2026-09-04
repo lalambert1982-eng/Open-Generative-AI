@@ -55,6 +55,8 @@ export default function WorkflowRunPanel({ project, request, onProjectChange, on
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pollTimerRef = useRef(null);
+  const busyRef = useRef(false);
+  useEffect(() => { busyRef.current = busy; }, [busy]);
 
   useEffect(() => {
     if (!selectedRunId && runs.length) setSelectedRunId(runs[0].id);
@@ -131,6 +133,10 @@ export default function WorkflowRunPanel({ project, request, onProjectChange, on
     const hasRunningNode = selectedRun?.status === "running" && selectedRun.nodes.some((node) => node.status === "running");
     if (!hasRunningNode) return undefined;
     pollTimerRef.current = window.setInterval(() => {
+      // Skip a tick entirely while a request is already in flight — an
+      // overlapping advance() call would read the same pre-completion project
+      // state and could race the in-flight write on the same node.
+      if (busyRef.current) return;
       runStep("advance");
     }, 3000);
     return () => window.clearInterval(pollTimerRef.current);
