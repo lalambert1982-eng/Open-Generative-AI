@@ -11,6 +11,7 @@ import {
     CreatorWorkflowError,
     advanceWorkflowRun,
     approveAndAdvanceWorkflowRun,
+    approveWorkflowNode,
     cancelWorkflowRun,
     createWorkflowRun,
     retryWorkflowNode,
@@ -298,6 +299,52 @@ test('a workflow run built from Storyboard scenes tags each node with its origin
     assert.equal(run.nodes[0].kind, 'image.generate');
 });
 
+test('a completed scene-linked node writes its output back into the Storyboard scene atomically', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    await saveCreatorStoryboard(owner, projectAId, {
+        storyboard: {
+            scenes: [{ id: 'scene-1', title: 'Opening', prompt: 'wide shot of the harbor at sunrise', aspectRatio: '16:9' }],
+        },
+    }, { env, blobStore, now: Date.UTC(2026, 0, 2) });
+
+    const idGenerator = sequentialIdGenerator('node');
+    const { run } = await createWorkflowRun(owner, projectAId, { source: 'storyboard' }, {
+        env, blobStore, idGenerator, now: Date.UTC(2026, 0, 3),
+    });
+
+    const fetchImpl = succeedingFetch();
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl, now: Date.UTC(2026, 0, 4) });
+    const finished = await approveAndAdvanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl, now: Date.UTC(2026, 0, 5) });
+
+    assert.equal(finished.run.nodes[0].status, 'completed');
+    const scene = finished.project.storyboard.scenes.find((item) => item.id === 'scene-1');
+    assert.equal(scene.imageUrl, finished.run.nodes[0].outputUrl);
+    assert.equal(scene.status, 'ready');
+
+    // Confirmed persisted, not just returned in this one response.
+    const reloaded = await getCreatorProject(owner, projectAId, { env, blobStore });
+    assert.equal(reloaded.storyboard.scenes[0].imageUrl, finished.run.nodes[0].outputUrl);
+});
+
+test('a Storyboard with more scenes than a run supports is rejected, never silently truncated', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const scenes = Array.from({ length: 25 }, (_, index) => ({
+        id: `scene-${index + 1}`,
+        title: `Scene ${index + 1}`,
+        prompt: `establishing shot number ${index + 1}`,
+        aspectRatio: '16:9',
+    }));
+    await saveCreatorStoryboard(owner, projectAId, { storyboard: { scenes } }, { env, blobStore, now: Date.UTC(2026, 0, 2) });
+
+    const idGenerator = sequentialIdGenerator('node');
+    await assert.rejects(
+        createWorkflowRun(owner, projectAId, { source: 'storyboard' }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 3) }),
+        (error) => error instanceof CreatorWorkflowError && error.code === 'invalid_workflow_input',
+    );
+});
+
 test('workflow run state persists across a fresh project reload, not just in-memory', async () => {
     const blobStore = creatorProjectStoreForTests(new Map());
     await setupProject(projectAId, owner, blobStore);
@@ -336,4 +383,61 @@ test('an unapproved node can never reach running or completed through any advanc
         assert.notEqual(result.run.nodes[0].status, 'completed');
         assert.notEqual(result.run.nodes[0].status, 'running');
     }
+});
+
+test('a Project write failure right after a successful provider submission never causes a second paid submission', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    const { run } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [{ kind: 'image.generate', prompt: 'a single step' }],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: succeedingFetch(), now: Date.UTC(2026, 0, 3) });
+    await approveWorkflowNode(owner, projectAId, run.id, { env, blobStore, now: Date.UTC(2026, 0, 4) });
+
+    let fetchCalls = 0;
+    const countingFetch = async (...args) => { fetchCalls += 1; return succeedingFetch()(...args); };
+
+    let puts = 0;
+    const faultyBlobStore = {
+        ...blobStore,
+        async put(...args) {
+            puts += 1;
+            // 1st put after approval = phase 1's "announce running" write (must
+            // succeed); 2nd = phase 2's "finalize after provider call" write —
+            // this is the one that fails, simulating a transient storage error
+            // that lands *after* the provider already accepted the job.
+            if (puts === 2) throw new Error('simulated_blob_write_failure');
+            return blobStore.put(...args);
+        },
+    };
+
+    await assert.rejects(
+        advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore: faultyBlobStore, fetchImpl: countingFetch, now: Date.UTC(2026, 0, 5) }),
+    );
+    assert.equal(fetchCalls, 1, 'the provider must have been called exactly once by the failed attempt');
+
+    // The failed write must not have silently reverted progress: the node is
+    // left visibly stuck (announced but unconfirmed), never quietly back at
+    // "pending" where the next call would resubmit it to the provider again.
+    const stuck = await getCreatorProject(owner, projectAId, { env, blobStore });
+    assert.equal(stuck.workflowRuns[0].nodes[0].status, 'running');
+    assert.equal(stuck.workflowRuns[0].nodes[0].jobId, null);
+
+    // The next advance() call — now against healthy storage — must fail this
+    // node cleanly and visibly rather than submitting a second paid job.
+    const recovered = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: countingFetch, now: Date.UTC(2026, 0, 6) });
+    assert.equal(fetchCalls, 1, 'recovering from the stuck state must never call the provider a second time');
+    assert.equal(recovered.run.nodes[0].status, 'failed');
+    assert.equal(recovered.run.status, 'failed');
+
+    // The node is then retryable exactly like any other failure.
+    const retried = await retryWorkflowNode(owner, projectAId, run.id, { env, blobStore, now: Date.UTC(2026, 0, 7) });
+    assert.equal(retried.run.nodes[0].status, 'pending');
+    const succeeded = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: countingFetch, now: Date.UTC(2026, 0, 8) });
+    assert.equal(succeeded.run.nodes[0].status, 'completed');
+    assert.equal(fetchCalls, 2, 'the retry performs exactly one new provider call');
 });

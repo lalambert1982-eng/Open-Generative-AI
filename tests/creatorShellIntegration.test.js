@@ -202,6 +202,14 @@ test('Workflow Execution reuses the Creator Studio shell instead of a second Wor
     assert.match(panel, /runStep\("approve"\)/);
     assert.match(panel, /runStep\("retry"\)/);
     assert.match(panel, /runStep\("cancel"\)/);
+
+    // workflow.configure/run/status carry a workflowId parameter that must
+    // actually select (and, for workflow.run, advance) the referenced run —
+    // not just navigate to an empty panel — while still going through the
+    // same approve-gated advance() as any manual click.
+    assert.match(creator, /<WorkflowRunPanel[\s\S]*?initialAction=\{initialAction\}/);
+    assert.match(panel, /initialAction\?\.parameters\?\.workflowId/);
+    assert.match(panel, /initialAction\.action === "workflow\.run"/);
     assert.match(panel, /workflows\/\$\{selectedRunId\}\/\$\{action\}/);
     assert.doesNotMatch(panel, /apiKey/);
 });

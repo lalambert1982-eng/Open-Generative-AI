@@ -868,6 +868,12 @@ export default function CreatorStudio({
             : previous.video.firstFrameUrl,
         },
       }));
+    } else if (typeof initialAction.action === 'string' && initialAction.action.startsWith('workflow.')) {
+      // Tab-switching is consumed here; WorkflowRunPanel consumes the same
+      // action separately to select (and, for workflow.run, advance) the
+      // referenced run once it has loaded.
+      consumedActionRef.current = actionKey;
+      setActiveToolId('workflow');
     }
   }, [initialAction, initialAsset]);
 
@@ -1474,7 +1480,7 @@ export default function CreatorStudio({
             project={project}
             request={request}
             onProjectChange={onProjectChange}
-            onStoryboardChange={onStoryboardChange}
+            initialAction={initialAction}
           />
         </main>
 

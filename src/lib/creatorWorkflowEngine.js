@@ -165,10 +165,14 @@ function buildWorkflowRunFromStoryboardScenes(project, { sceneIds, name } = {}, 
     const requested = Array.isArray(sceneIds) && sceneIds.length
         ? new Set(sceneIds.map((id) => text(id, 140)))
         : null;
-    const selected = (requested ? scenes.filter((scene) => requested.has(scene.id)) : scenes).slice(0, MAX_WORKFLOW_NODES);
+    const selected = requested ? scenes.filter((scene) => requested.has(scene.id)) : scenes;
     if (selected.length === 0) {
         throw new CreatorWorkflowError('invalid_workflow_input', 'The Storyboard has no scenes available to build a workflow from.');
     }
+    // Do not silently drop scenes past the run limit — buildRun's own node-count
+    // check below rejects an over-long selection with a visible error instead,
+    // so a 35-scene storyboard run either includes all of them or fails clearly,
+    // never quietly executes only the first 20.
     const nodesInput = selected.map((scene) => ({
         kind: 'image.generate',
         label: text(scene.title, 120),
@@ -302,9 +306,31 @@ async function step(user, projectId, runId, transition, options = {}) {
             if (assets.length >= MAX_ASSETS) {
                 throw new CreatorWorkflowError('asset_limit', `A Project supports at most ${MAX_ASSETS} Assets.`, 409);
             }
-            const nextAssets = [result.asset, ...assets];
-            patch.assets = nextAssets;
-            patch.timeline = storyboardToTimeline(proj.storyboard, nextAssets);
+            patch.assets = [result.asset, ...assets];
+        }
+        if (result.storyboardSceneUpdate) {
+            // Written atomically with the asset above, in the same Project
+            // write, rather than as a separate client-triggered save — a
+            // completed scene node can never register its asset while failing
+            // (or racing) to write the scene URL back.
+            const { sceneId, url, isVideo } = result.storyboardSceneUpdate;
+            const scenes = Array.isArray(proj.storyboard?.scenes) ? proj.storyboard.scenes : [];
+            const sceneIndex = scenes.findIndex((scene) => scene.id === sceneId);
+            if (sceneIndex !== -1) {
+                const updatedScene = {
+                    ...scenes[sceneIndex],
+                    imageUrl: isVideo ? scenes[sceneIndex].imageUrl : url,
+                    videoUrl: isVideo ? url : scenes[sceneIndex].videoUrl,
+                    status: 'ready',
+                    error: '',
+                };
+                patch.storyboard = { ...proj.storyboard, scenes: replaceAt(scenes, sceneIndex, updatedScene) };
+            }
+            // A scene the user has since deleted is not an error: the asset is
+            // still registered in Project Assets either way.
+        }
+        if (result.asset || result.storyboardSceneUpdate) {
+            patch.timeline = storyboardToTimeline(patch.storyboard || proj.storyboard, patch.assets || proj.assets);
         }
         return patch;
     }, options);
@@ -313,8 +339,18 @@ async function step(user, projectId, runId, transition, options = {}) {
 }
 
 export async function advanceWorkflowRun(user, projectId, runId, options = {}) {
-    return step(user, projectId, runId, async (run, project, ctx) => {
-        const { env, fetchImpl, idGenerator, now } = ctx;
+    // Phase 1: a pure, synchronous state transition (no provider call). If the
+    // current node is pending and approved, this only *announces* the intent
+    // to submit it — marking it "running" — and hands the resolved inputs back
+    // to the caller. The actual provider call happens in phase 2, as a second,
+    // independent transaction. Recording intent first means a write failure
+    // after a successful provider call leaves a node visibly stuck in
+    // "running" with no jobId (which the next poll attempt fails cleanly,
+    // requiring a retry) instead of silently resubmitting a duplicate paid job
+    // on the very next advance() call.
+    let announcedSubmission = null;
+    const phase1 = await step(user, projectId, runId, async (run, project, ctx) => {
+        const { env, fetchImpl, now } = ctx;
         if (!['queued', 'running'].includes(run.status)) return null;
 
         if (run.currentNodeIndex >= run.nodes.length) {
@@ -344,33 +380,25 @@ export async function advanceWorkflowRun(user, projectId, runId, options = {}) {
                 };
             }
 
-            const result = await submitNode(node, resolvedInputs, { env, fetchImpl });
-            if (!result.ok) {
-                const updatedNode = { ...node, status: 'failed', error: result.error || 'Provider error.', completedAt: iso(now) };
-                return {
-                    reason: 'node_failed',
-                    run: { ...run, status: 'failed', nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
-                };
-            }
-
-            const job = result.job;
-            if (job.status === 'completed' && job.url) {
-                return completeNode({ run, nodeIndex, node, job, project, idGenerator, now, env });
-            }
-            const updatedNode = {
-                ...node,
-                status: 'running',
-                jobId: job.jobId || null,
-                providerKind: job.kind || providerKindFor(node),
-                startedAt: iso(now),
-            };
+            announcedSubmission = { nodeIndex, resolvedInputs };
+            const updatedNode = { ...node, status: 'running', startedAt: iso(now) };
             return {
-                reason: 'node_submitted',
+                reason: 'node_submitting',
                 run: { ...run, status: 'running', nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
             };
         }
 
         if (node.status === 'running') {
+            // Either genuinely awaiting the provider (has a jobId — poll it),
+            // or a prior submission was announced but never finalized (no
+            // jobId — this fails cleanly rather than re-submitting).
+            if (!node.jobId) {
+                const updatedNode = { ...node, status: 'failed', error: 'The generation request was interrupted before it could be confirmed. Retry this step.', completedAt: iso(now) };
+                return {
+                    reason: 'node_failed',
+                    run: { ...run, status: 'failed', nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
+                };
+            }
             const result = await pollNode(node, { env, fetchImpl });
             if (!result.ok) {
                 const updatedNode = { ...node, status: 'failed', error: result.error || 'Provider error.', completedAt: iso(now) };
@@ -381,7 +409,7 @@ export async function advanceWorkflowRun(user, projectId, runId, options = {}) {
             }
             const job = result.job;
             if (job.status === 'completed' && job.url) {
-                return completeNode({ run, nodeIndex, node, job, project, idGenerator, now, env });
+                return completeNode({ run, nodeIndex, node, job, project, idGenerator: ctx.idGenerator, now, env });
             }
             if (job.status === 'failed') {
                 const updatedNode = { ...node, status: 'failed', error: job.error || 'Generation failed.', completedAt: iso(now) };
@@ -395,6 +423,43 @@ export async function advanceWorkflowRun(user, projectId, runId, options = {}) {
 
         // waiting_for_approval or failed nodes require an explicit approve/retry call.
         return null;
+    }, options);
+
+    if (!announcedSubmission) return phase1;
+
+    // Phase 2: perform the already-announced provider submission, then
+    // finalize the result in its own transaction. Only finalizes if the node
+    // is still exactly where phase 1 left it, guarding against a concurrent
+    // cancel/retry landing in between.
+    const { nodeIndex, resolvedInputs } = announcedSubmission;
+    return step(user, projectId, runId, async (run, project, ctx) => {
+        const { env, fetchImpl, idGenerator, now } = ctx;
+        const node = run.nodes[nodeIndex];
+        if (!node || node.status !== 'running' || node.jobId) return null;
+
+        const result = await submitNode(node, resolvedInputs, { env, fetchImpl });
+        if (!result.ok) {
+            const updatedNode = { ...node, status: 'failed', error: result.error || 'Provider error.', completedAt: iso(now) };
+            return {
+                reason: 'node_failed',
+                run: { ...run, status: 'failed', nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
+            };
+        }
+
+        const job = result.job;
+        if (job.status === 'completed' && job.url) {
+            return completeNode({ run, nodeIndex, node, job, project, idGenerator, now, env });
+        }
+        const updatedNode = {
+            ...node,
+            status: 'running',
+            jobId: job.jobId || null,
+            providerKind: job.kind || providerKindFor(node),
+        };
+        return {
+            reason: 'node_submitted',
+            run: { ...run, status: 'running', nodes: replaceAt(run.nodes, nodeIndex, updatedNode), updatedAt: iso(now) },
+        };
     }, options);
 }
 
@@ -419,7 +484,7 @@ function completeNode({ run, nodeIndex, node, job, project, idGenerator, now, en
     };
     const nextIndex = nodeIndex + 1;
     const runCompleted = nextIndex >= run.nodes.length;
-    return {
+    const result = {
         reason: 'node_completed',
         asset,
         run: {
@@ -430,6 +495,14 @@ function completeNode({ run, nodeIndex, node, job, project, idGenerator, now, en
             updatedAt: iso(now),
         },
     };
+    if (node.inputs?.sceneId) {
+        result.storyboardSceneUpdate = {
+            sceneId: node.inputs.sceneId,
+            url: asset.url,
+            isVideo: node.kind !== 'image.generate',
+        };
+    }
+    return result;
 }
 
 export async function approveWorkflowNode(user, projectId, runId, options = {}) {

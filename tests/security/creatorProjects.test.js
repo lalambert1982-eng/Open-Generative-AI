@@ -12,6 +12,8 @@ import {
     deleteCreatorAsset,
     getCreatorProject,
     listCreatorProjects,
+    mutateCreatorProject,
+    renameCreatorProject,
     saveCreatorStoryboard,
 } from '../../src/lib/creatorProjectStore.js';
 import { resetRateLimitStore } from '../../src/lib/rateLimit.js';
@@ -255,4 +257,44 @@ test('Project Asset uploads fail visibly closed when the public store is not con
     });
     assert.equal(response.status, 503);
     assert.deepEqual((await response.json()).missing, ['CREATOR_ASSET_BLOB_READ_WRITE_TOKEN']);
+});
+
+test('mutateCreatorProject refuses to overwrite a Project changed by another request while its mutator was still running', async () => {
+    const records = new Map();
+    const blobStore = creatorProjectStoreForTests(records);
+    await createCreatorProject(owner, { name: 'Race Project' }, {
+        env, blobStore, idGenerator: () => projectId, now: Date.UTC(2026, 0, 1),
+    });
+
+    let releaseSlowMutator;
+    const slowMutatorEntered = new Promise((resolve) => {
+        mutateCreatorProject(owner, projectId, async (project) => {
+            resolve();
+            // Simulate a long-running provider call in progress while another
+            // request commits a completely unrelated change underneath us.
+            await new Promise((release) => { releaseSlowMutator = release; });
+            return { name: `${project.name} (slow writer)` };
+        }, { env, blobStore, now: Date.UTC(2026, 0, 2) }).then(
+            (value) => { slowResult = { ok: true, value }; },
+            (error) => { slowResult = { ok: false, error }; },
+        );
+    });
+    let slowResult;
+
+    await slowMutatorEntered;
+    const renamed = await renameCreatorProject(owner, projectId, { name: 'Renamed mid-flight' }, {
+        env, blobStore, now: Date.UTC(2026, 0, 3),
+    });
+    assert.equal(renamed.name, 'Renamed mid-flight');
+
+    releaseSlowMutator();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(slowResult.ok, false);
+    assert.ok(slowResult.error instanceof CreatorProjectError);
+    assert.equal(slowResult.error.code, 'project_conflict');
+
+    // The interleaving rename must survive — not be silently clobbered by the
+    // slow writer's stale patch.
+    const final = await getCreatorProject(owner, projectId, { env, blobStore });
+    assert.equal(final.name, 'Renamed mid-flight');
 });

@@ -49,13 +49,14 @@ async function parseJson(response) {
   }
 }
 
-export default function WorkflowRunPanel({ project, request, onProjectChange, onStoryboardChange }) {
+export default function WorkflowRunPanel({ project, request, onProjectChange, initialAction }) {
   const runs = useMemo(() => (Array.isArray(project?.workflowRuns) ? project.workflowRuns : []), [project]);
   const [selectedRunId, setSelectedRunId] = useState(runs[0]?.id || null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pollTimerRef = useRef(null);
   const busyRef = useRef(false);
+  const consumedSelenaActionRef = useRef(null);
   useEffect(() => { busyRef.current = busy; }, [busy]);
 
   useEffect(() => {
@@ -64,30 +65,6 @@ export default function WorkflowRunPanel({ project, request, onProjectChange, on
   }, [runs, selectedRunId]);
 
   const selectedRun = runs.find((run) => run.id === selectedRunId) || null;
-
-  const applyStoryboardHandoff = useCallback((nextProject, run, reason) => {
-    if (reason !== "node_completed" || typeof onStoryboardChange !== "function") return;
-    const nodeIndex = run.currentNodeIndex - 1;
-    const node = run.nodes[nodeIndex];
-    const sceneId = node?.inputs?.sceneId;
-    if (!sceneId || !node.outputUrl) return;
-    const scenes = Array.isArray(nextProject?.storyboard?.scenes) ? nextProject.storyboard.scenes : [];
-    if (!scenes.some((scene) => scene.id === sceneId)) return;
-    const updatedScenes = scenes.map((scene) => (scene.id === sceneId
-      ? {
-        ...scene,
-        imageUrl: node.kind === "image.generate" ? node.outputUrl : scene.imageUrl,
-        videoUrl: node.kind !== "image.generate" ? node.outputUrl : scene.videoUrl,
-        status: "ready",
-        error: "",
-      }
-      : scene));
-    onStoryboardChange({
-      version: 1,
-      selectedSceneId: nextProject.storyboard.selectedSceneId,
-      scenes: updatedScenes,
-    }).catch(() => {});
-  }, [onStoryboardChange]);
 
   const callAction = useCallback(async (path, options, { onResult } = {}) => {
     setBusy(true);
@@ -118,12 +95,35 @@ export default function WorkflowRunPanel({ project, request, onProjectChange, on
 
   const runStep = useCallback((action) => {
     if (!project?.id || !selectedRunId) return;
-    return callAction(`projects/${project.id}/workflows/${selectedRunId}/${action}`, { method: "POST" }, {
-      onResult: (data) => {
-        if (data.project && data.run) applyStoryboardHandoff(data.project, data.run, data.reason);
-      },
-    });
-  }, [project?.id, selectedRunId, callAction, applyStoryboardHandoff]);
+    // Storyboard handoff for a scene-linked node is written atomically by the
+    // server as part of node completion (see creatorWorkflowEngine.js), so
+    // there is nothing further to persist here — onProjectChange above already
+    // carries the updated storyboard/assets.
+    return callAction(`projects/${project.id}/workflows/${selectedRunId}/${action}`, { method: "POST" });
+  }, [project?.id, selectedRunId, callAction]);
+
+  // Consume a Selena workflow.* action: select the run it named (workflow.
+  // configure/run/status all carry a workflowId), and for workflow.run also
+  // perform one advance() — still fully subject to the run's own approval
+  // gate, since advance() never bypasses it. workflow.create carries no
+  // workflowId; landing on this panel with its "New run" button is the whole
+  // affordance for that action.
+  useEffect(() => {
+    const actionKey = initialAction?.id || "";
+    if (!actionKey || consumedSelenaActionRef.current === actionKey || !project?.id) return;
+    const workflowId = initialAction?.parameters?.workflowId;
+    if (!workflowId) {
+      consumedSelenaActionRef.current = actionKey;
+      return;
+    }
+    const target = runs.find((run) => run.id === workflowId);
+    if (!target) return; // runs may still be loading; retry once the list updates
+    consumedSelenaActionRef.current = actionKey;
+    setSelectedRunId(target.id);
+    if (initialAction.action === "workflow.run" && ["queued", "running"].includes(target.status)) {
+      callAction(`projects/${project.id}/workflows/${target.id}/advance`, { method: "POST" });
+    }
+  }, [initialAction, project?.id, runs, callAction]);
 
   // Poll while a node is actively submitted/processing so status keeps advancing
   // without requiring the user to keep clicking, mirroring the polling pattern

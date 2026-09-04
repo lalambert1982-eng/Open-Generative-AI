@@ -586,6 +586,14 @@ export async function mutateCreatorProject(user, projectId, mutator, {
     if (expectedRevision != null) assertExpectedRevision(project, expectedRevision);
     const patch = await mutator(project);
     if (patch == null) return projectForClient(project);
+    // mutator may have awaited slow work (a provider call) between the read
+    // above and here. Re-read immediately before writing and refuse to
+    // overwrite a Project another request already changed in that window,
+    // rather than silently discarding that other write.
+    const current = await readProject(owner, id, { configuration, blobStore });
+    if (current.revision !== project.revision) {
+        throw new CreatorProjectError('project_conflict', 'Project changed in another request. Reload it and try again.', 409);
+    }
     const next = updatedProject(project, patch, now);
     await writeProject(next, { configuration, blobStore, allowOverwrite: true });
     return projectForClient(next);
