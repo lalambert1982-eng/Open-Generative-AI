@@ -6,6 +6,7 @@ export const OPENAI_IMAGE_TOOL_ID = 'openai_image';
 export const ELEVENLABS_VOICE_TOOL_ID = 'elevenlabs_voice';
 export const HEYGEN_AVATAR_VIDEO_TOOL_ID = 'heygen_avatar_video';
 export const RUNWAY_VIDEO_TOOL_ID = 'runway_video';
+export const NVIDIA_IMAGE_TOOL_ID = 'nvidia_image';
 export const YOUTUBE_PUBLISH_TOOL_ID = 'youtube_publish';
 export const INSTAGRAM_PUBLISH_TOOL_ID = 'instagram_publish';
 export const TIKTOK_PUBLISH_TOOL_ID = 'tiktok_publish';
@@ -138,6 +139,16 @@ export const RUNWAY_VIDEO_TOOL = Object.freeze({
     returns: Object.freeze(['provider', 'toolId', 'jobId', 'status', 'output', 'failure', 'error']),
 });
 
+export const NVIDIA_IMAGE_TOOL = Object.freeze({
+    id: NVIDIA_IMAGE_TOOL_ID,
+    provider: 'nvidia',
+    label: 'NVIDIA Image Generation',
+    purpose: 'Generate or edit one approved image through the server-owned NVIDIA Build Visual Design gateway. Distinct from the NVIDIA Brain reasoning provider.',
+    asynchronous: false,
+    accepts: Object.freeze(['prompt', 'referenceImage', 'aspectRatio', 'seed', 'steps']),
+    returns: Object.freeze(['provider', 'toolId', 'kind', 'model', 'contentType', 'image', 'error']),
+});
+
 export const YOUTUBE_PUBLISH_TOOL = Object.freeze({
     id: YOUTUBE_PUBLISH_TOOL_ID,
     provider: 'youtube',
@@ -216,6 +227,7 @@ const CREATOR_TOOL_REGISTRY = Object.freeze({
     [ELEVENLABS_VOICE_TOOL_ID]: ELEVENLABS_VOICE_TOOL,
     [HEYGEN_AVATAR_VIDEO_TOOL_ID]: HEYGEN_AVATAR_VIDEO_TOOL,
     [RUNWAY_VIDEO_TOOL_ID]: RUNWAY_VIDEO_TOOL,
+    [NVIDIA_IMAGE_TOOL_ID]: NVIDIA_IMAGE_TOOL,
     [YOUTUBE_PUBLISH_TOOL_ID]: YOUTUBE_PUBLISH_TOOL,
     [INSTAGRAM_PUBLISH_TOOL_ID]: INSTAGRAM_PUBLISH_TOOL,
     [TIKTOK_PUBLISH_TOOL_ID]: TIKTOK_PUBLISH_TOOL,

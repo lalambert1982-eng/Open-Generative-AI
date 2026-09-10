@@ -8,6 +8,7 @@ import {
     handleMuapiImage,
     handleMuapiStatus,
     handleMuapiVideo,
+    handleNvidiaImage,
     handleOpenAiImage,
 } from '../../src/lib/creatorProviderGateway.js';
 import { createCreatorSession, creatorCookieSettings } from '../../src/lib/creatorAuth.js';
@@ -17,6 +18,7 @@ import {
     HEYGEN_AVATAR_VIDEO_TOOL_ID,
     MUAPI_IMAGE_TOOL_ID,
     MUAPI_VIDEO_TOOL_ID,
+    NVIDIA_IMAGE_TOOL_ID,
 } from '../../src/lib/creatorToolRegistry.js';
 import { resetRateLimitStore } from '../../src/lib/rateLimit.js';
 
@@ -178,6 +180,7 @@ test('provider status reports readiness without disclosing provider credentials'
         HEYGEN_VOICE_ID: 'heygen-voice-id',
         RUNWAY_API_KEY: 'runway-provider-secret',
         MUAPI_API_KEY: 'muapi-sandbox-provider-secret',
+        NVIDIA_API_KEY: 'nvidia-provider-secret',
     };
     const response = await handleCreatorProviders(creatorRequest('providers'), {
         env: {
@@ -193,15 +196,17 @@ test('provider status reports readiness without disclosing provider credentials'
     assert.equal(response.status, 200);
     const text = await response.text();
     const body = JSON.parse(text);
-    assert.deepEqual(body.providers.map((provider) => provider.configured), [true, true, true, true]);
+    assert.deepEqual(body.providers.map((provider) => provider.configured), [true, true, true, true, true]);
     assert.deepEqual(body.providers.map((provider) => provider.toolId), [
         BRAIN_REASONING_TOOL_ID,
         undefined,
         ELEVENLABS_VOICE_TOOL_ID,
         HEYGEN_AVATAR_VIDEO_TOOL_ID,
+        NVIDIA_IMAGE_TOOL_ID,
     ]);
     assert.deepEqual(body.providers[1].toolIds, [MUAPI_IMAGE_TOOL_ID, MUAPI_VIDEO_TOOL_ID]);
     assert.deepEqual(body.brainProviders.map((provider) => provider.id), [
+        'nvidia',
         'gemini',
         'groq',
         'openrouter',
@@ -211,6 +216,7 @@ test('provider status reports readiness without disclosing provider credentials'
         'muapi',
         'elevenlabs',
         'heygen',
+        'nvidia-image',
     ]);
     assert.deepEqual(body.deferredGenerationProviders.map((provider) => provider.id), ['openai', 'runway']);
     assert.equal(body.brain.selectedProvider, 'gemini');
@@ -369,6 +375,81 @@ test('OpenAI image proxy returns image bytes without exposing the API key', asyn
     assert.equal(captured.options.headers.authorization, `Bearer ${providerKey}`);
     assert.equal(captured.options.headers.cookie, undefined);
     assert.deepEqual(new Uint8Array(await response.arrayBuffer()), png);
+});
+
+test('NVIDIA image proxy returns image bytes without exposing the API key', async () => {
+    resetRateLimitStore();
+    const providerKey = 'nvidia-provider-secret';
+    const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    let captured;
+    const response = await handleNvidiaImage(
+        creatorRequest('nvidia-image', { prompt: 'A dramatic track stadium at sunset.', aspectRatio: '16:9' }),
+        {
+            env: { ...baseEnv, NVIDIA_API_KEY: providerKey },
+            fetchImpl: async (url, options) => {
+                captured = { url, options };
+                return new Response(JSON.stringify({
+                    artifacts: [{ base64: Buffer.from(png).toString('base64') }],
+                }), {
+                    status: 200,
+                    headers: { 'content-type': 'application/json' },
+                });
+            },
+        },
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'image/png');
+    assert.equal(response.headers.get('x-creator-tool-id'), NVIDIA_IMAGE_TOOL_ID);
+    assert.equal(response.headers.get('x-generation-kind'), 'generate');
+    assert.equal(captured.url, 'https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux_2-klein-4b');
+    assert.equal(captured.options.headers.authorization, `Bearer ${providerKey}`);
+    assert.equal(captured.options.headers.cookie, undefined);
+    assert.deepEqual(new Uint8Array(await response.arrayBuffer()), png);
+});
+
+test('NVIDIA image proxy rejects unauthenticated and cross-origin requests before provider access', async () => {
+    resetRateLimitStore();
+    let called = false;
+    const unauthenticated = await handleNvidiaImage(
+        creatorRequest('nvidia-image', { prompt: 'x' }, ''),
+        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
+    );
+    assert.equal(unauthenticated.status, 401);
+
+    const crossOrigin = await handleNvidiaImage(
+        creatorRequest('nvidia-image', { prompt: 'x' }, session, { origin: 'https://attacker.test', 'sec-fetch-site': 'cross-site' }),
+        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
+    );
+    assert.equal(crossOrigin.status, 403);
+    assert.equal(called, false);
+});
+
+test('NVIDIA image proxy reports missing configuration without calling the provider', async () => {
+    resetRateLimitStore();
+    let called = false;
+    const response = await handleNvidiaImage(
+        creatorRequest('nvidia-image', { prompt: 'x' }),
+        { env: baseEnv, fetchImpl: async () => { called = true; return new Response('{}'); } },
+    );
+    const body = await response.json();
+    assert.equal(response.status, 503);
+    assert.deepEqual(body.missing, ['NVIDIA_API_KEY']);
+    assert.equal(called, false);
+});
+
+test('provider status lists NVIDIA Image Generation distinct from the NVIDIA-backed Selena Brain', async () => {
+    resetRateLimitStore();
+    const response = await handleCreatorProviders(creatorRequest('providers'), {
+        env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret', BRAIN_PROVIDER: 'nvidia' },
+    });
+    const body = await response.json();
+    const nvidiaImage = body.providers.find((provider) => provider.id === 'nvidia-image');
+    assert.equal(nvidiaImage.configured, true);
+    assert.equal(nvidiaImage.toolId, NVIDIA_IMAGE_TOOL_ID);
+    assert.equal(nvidiaImage.category, 'generation');
+    assert.notEqual(nvidiaImage.label, body.brain.label);
+    assert.equal(JSON.stringify(body).includes('nvidia-provider-secret'), false);
 });
 
 test('creator provider polling/status endpoint is rate limited by GitHub identity', async () => {

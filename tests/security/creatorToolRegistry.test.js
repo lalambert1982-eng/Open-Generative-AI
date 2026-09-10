@@ -9,6 +9,7 @@ import {
     INSTAGRAM_PUBLISH_TOOL_ID,
     MUAPI_IMAGE_TOOL_ID,
     MUAPI_VIDEO_TOOL_ID,
+    NVIDIA_IMAGE_TOOL_ID,
     OPENAI_IMAGE_TOOL_ID,
     RUNWAY_VIDEO_TOOL_ID,
     TIKTOK_PUBLISH_TOOL_ID,
@@ -26,6 +27,7 @@ const EXPECTED_TOOLS = [
     [ELEVENLABS_VOICE_TOOL_ID, 'elevenlabs'],
     [HEYGEN_AVATAR_VIDEO_TOOL_ID, 'heygen'],
     [RUNWAY_VIDEO_TOOL_ID, 'runway'],
+    [NVIDIA_IMAGE_TOOL_ID, 'nvidia'],
     [YOUTUBE_PUBLISH_TOOL_ID, 'youtube'],
     [INSTAGRAM_PUBLISH_TOOL_ID, 'muapi-social'],
     [TIKTOK_PUBLISH_TOOL_ID, 'muapi-social'],
@@ -55,6 +57,13 @@ test('registry preserves asynchronous jobs and private YouTube approval constrai
     assert.equal(getCreatorToolDefinition(RUNWAY_VIDEO_TOOL_ID).asynchronous, true);
     assert.equal(getCreatorToolDefinition(OPENAI_IMAGE_TOOL_ID).deferred, true);
     assert.equal(getCreatorToolDefinition(RUNWAY_VIDEO_TOOL_ID).deferred, true);
+
+    const nvidiaImage = getCreatorToolDefinition(NVIDIA_IMAGE_TOOL_ID);
+    assert.equal(nvidiaImage.provider, 'nvidia');
+    assert.equal(nvidiaImage.asynchronous, false);
+    assert.equal(nvidiaImage.deferred, undefined);
+    assert.equal(nvidiaImage.accepts.includes('referenceImage'), true);
+    assert.notEqual(nvidiaImage.label, getCreatorToolDefinition(BRAIN_REASONING_TOOL_ID).label);
 
     const youtube = getCreatorToolDefinition(YOUTUBE_PUBLISH_TOOL_ID);
     assert.equal(youtube.asynchronous, true);

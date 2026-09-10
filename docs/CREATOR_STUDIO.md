@@ -75,13 +75,15 @@ The Creator assistant route adds a server-owned structured orchestration contrac
 
 When a Project ID is supplied, the server loads the Project using the authenticated owner identity. The prompt receives only bounded Project/Storyboard/Asset summaries. Browser-supplied Project context, media URLs, and provider metadata are not trusted as Selena context.
 
-`NVIDIA` (via NVIDIA NIM) is the primary provider. The fallback order is `gemini,groq,openrouter,anthropic`. Anthropic remains fully supported through the existing `anthropic_assistant` compatibility boundary and can also be selected directly with `BRAIN_PROVIDER=anthropic`.
+`NVIDIA` (via NVIDIA Build/NIM) is the primary provider, using the agentic reasoning model `nvidia/nemotron-3.5-lightning-30b-a3b` by default. The fallback order is `gemini,groq,openrouter,anthropic`. Anthropic remains fully supported through the existing `anthropic_assistant` compatibility boundary and can also be selected directly with `BRAIN_PROVIDER=anthropic`.
 
-Automatic fallback is bounded by `BRAIN_MAX_ATTEMPTS`. It is allowed for timeouts, transient provider failures, rate/quota limits, malformed provider responses, and explicitly unsupported capabilities. It is not allowed for safety rejection, invalid input, invalid/missing credentials, or requests marked as publishing, paid generation, another external mutation, or requiring explicit approval.
+The NVIDIA reasoning model is configured with `NVIDIA_BRAIN_MODEL` -- kept separate from `NVIDIA_IMAGE_MODEL` (see NVIDIA Image Generation below) so the two NVIDIA capabilities are never confused. The legacy `NVIDIA_MODEL` variable is still read as a backward-compatible fallback when `NVIDIA_BRAIN_MODEL` is unset.
+
+Automatic fallback is bounded by `BRAIN_MAX_ATTEMPTS`, which defaults to the length of the full configured chain (5 with the default chain above) rather than an arbitrary cap; set it explicitly to cap the chain lower. Fallback is allowed for timeouts, transient provider failures, rate/quota limits, malformed provider responses, explicitly unsupported capabilities, and a provider that is simply not configured (missing its API key) -- a misconfigured primary provider no longer stops the whole chain. Fallback is not allowed, and the router fails closed immediately, when automatic fallback is disabled, when a caller pins an explicit `providerOverride` (an explicit request for one provider is never silently rerouted), for safety rejection, invalid input, invalid credentials, or requests marked as publishing, paid generation, another external mutation, or requiring explicit approval.
 
 `PUBLIC` and `NORMAL` work may use the configured order. `PRIVATE` and `CLIENT_CONFIDENTIAL` work fail closed unless an operator explicitly reviews current provider/deployment terms and lists eligible providers in `BRAIN_PRIVATE_ELIGIBLE_PROVIDERS` or `BRAIN_CLIENT_CONFIDENTIAL_ELIGIBLE_PROVIDERS`. The repository does not claim that any provider is inherently suitable for confidential data.
 
-The requested model identifiers were verified against current official documentation on 2026-08-25: Google documents [`gemini-3.7-flash`](https://ai.google.dev/gemini-api/docs/models/gemini-3.7-flash), Groq lists [`openai/gpt-oss-120b`](https://console.groq.com/docs/models), and OpenRouter documents its [`openrouter/free`](https://openrouter.ai/docs/guides/routing/routers/free-router) router. Model IDs remain environment-configurable. “Free brain” means use of an available free/developer allowance; it is not a promise of perpetual zero-cost service, and each provider's current account tier, limits, and pricing still apply.
+The requested model identifiers were verified against current official documentation: NVIDIA Build/NIM documents [`nvidia/nemotron-3.5-lightning-30b-a3b`](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b) for agentic reasoning, Google documents [`gemini-3.7-flash`](https://ai.google.dev/gemini-api/docs/models/gemini-3.7-flash), Groq lists [`openai/gpt-oss-120b`](https://console.groq.com/docs/models), and OpenRouter documents its [`openrouter/free`](https://openrouter.ai/docs/guides/routing/routers/free-router) router. Model IDs remain environment-configurable. “Free brain” means use of an available free/developer allowance; it is not a promise of perpetual zero-cost service, and each provider's current account tier, limits, and pricing still apply.
 
 ### Preview brain configuration
 
@@ -94,20 +96,31 @@ GROQ_API_KEY=
 OPENROUTER_API_KEY=
 ```
 
-Add these nine values as normal non-secret Preview configuration:
+Add these values as normal non-secret Preview configuration:
 
 ```dotenv
 BRAIN_PROVIDER=nvidia
-NVIDIA_MODEL=nvidia/llama-3.1-nemotron-70b-instruct
+NVIDIA_BRAIN_MODEL=nvidia/nemotron-3.5-lightning-30b-a3b
 GEMINI_MODEL=gemini-3.7-flash
 GROQ_MODEL=openai/gpt-oss-120b
 OPENROUTER_MODEL=openrouter/free
 BRAIN_FALLBACK_ORDER=gemini,groq,openrouter,anthropic
 BRAIN_ENABLE_AUTOMATIC_FALLBACK=true
-BRAIN_MAX_ATTEMPTS=3
+BRAIN_MAX_ATTEMPTS=
 ```
 
-Do not copy the four Preview API-key values into Production automatically. After mocked/local validation and an explicitly approved Preview test, Production needs the same variable **names** in its own environment: `NVIDIA_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `BRAIN_PROVIDER`, `NVIDIA_MODEL`, `GEMINI_MODEL`, `GROQ_MODEL`, `OPENROUTER_MODEL`, `BRAIN_FALLBACK_ORDER`, `BRAIN_ENABLE_AUTOMATIC_FALLBACK`, and `BRAIN_MAX_ATTEMPTS`. Production configuration and deployment require separate approval.
+Do not copy the four Preview API-key values into Production automatically. After mocked/local validation and an explicitly approved Preview test, Production needs the same variable **names** in its own environment: `NVIDIA_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `BRAIN_PROVIDER`, `NVIDIA_BRAIN_MODEL`, `GEMINI_MODEL`, `GROQ_MODEL`, `OPENROUTER_MODEL`, `BRAIN_FALLBACK_ORDER`, `BRAIN_ENABLE_AUTOMATIC_FALLBACK`, and `BRAIN_MAX_ATTEMPTS`. Production configuration and deployment require separate approval.
+
+## Configure NVIDIA Image Generation
+
+NVIDIA Image Generation is a separate, deferred media-generation provider -- distinct from the NVIDIA Brain reasoning provider above -- implemented in `src/lib/nvidiaCreatorProvider.js` and exposed through `src/lib/creatorProviderGateway.js` and `src/lib/creatorToolRegistry.js` (tool ID `nvidia_image`) like every other generation provider. It shares `NVIDIA_API_KEY` with the Brain provider but is configured with its own model variable:
+
+```dotenv
+NVIDIA_API_KEY=
+NVIDIA_IMAGE_MODEL=flux-2-klein-4b
+```
+
+`NVIDIA_IMAGE_MODEL` is resolved against a fixed server-side registry (currently [`black-forest-labs/flux_2-klein-4b`](https://build.nvidia.com/black-forest-labs/flux_2-klein-4b), which supports both image generation and image editing). An unrecognized or unset value falls back to the reviewed default instead of being forwarded upstream, and the browser can never select a model or upstream URL directly. Requests accept `prompt`, an optional base64 `referenceImage` (for editing), `aspectRatio`, `seed`, and `steps`; the normalized result matches the existing binary-image provider contract already used by the deferred OpenAI adapter.
 
 ## Configure Greg's HeyGen Digital Twin
 
@@ -123,7 +136,7 @@ HEYGEN_VOICE_ID=aecf8d74f6b8467b84d24e9dc541b19a
 
 Creator Studio submits text-to-avatar jobs to HeyGen asynchronously and polls the fixed HeyGen video-status endpoint. The default canvas is portrait `9:16` at `1080p`, with social captions enabled in the UI. The authenticated browser receives only a normalized job ID, status, HTTPS video and thumbnail URLs, duration, and sanitized error information.
 
-The reusable server-side tool registry exposes provider-neutral reasoning as `brain_reasoning`, active `muapi_image` and `muapi_video` boundaries, and the existing `elevenlabs_voice`, `heygen_avatar_video`, and `youtube_publish` boundaries. The preserved `anthropic_assistant`, `openai_image`, and `runway_video` definitions remain available as compatibility metadata; OpenAI and Runway are explicitly marked deferred. These definitions do not recreate agents or duplicate generation-provider adapters.
+The reusable server-side tool registry exposes provider-neutral reasoning as `brain_reasoning`, active `muapi_image` and `muapi_video` boundaries, and the existing `elevenlabs_voice`, `heygen_avatar_video`, and `youtube_publish` boundaries. The preserved `anthropic_assistant`, `openai_image`, and `runway_video` definitions remain available as compatibility metadata; OpenAI and Runway are explicitly marked deferred. `nvidia_image` (NVIDIA Image Generation) is a separate, non-deferred media boundary distinct from the NVIDIA Brain reasoning provider -- see "Configure NVIDIA Image Generation" above. These definitions do not recreate agents or duplicate generation-provider adapters.
 
 The `heygen_avatar_video` boundary resolves the default avatar and voice from `HEYGEN_AVATAR_ID` and `HEYGEN_VOICE_ID`, never from browser input or a client-readable environment variable. It accepts validated optional avatar/voice overrides, background configuration, captions, and supported motion settings. The payload builder already separates script input from media input so a later `ElevenLabs → audio URL/asset → HeyGen lip-sync` path can be added without replacing the current HeyGen voice workflow.
 

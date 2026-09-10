@@ -34,8 +34,11 @@ export const BRAIN_SENSITIVITIES = Object.freeze([
     'CLIENT_CONFIDENTIAL',
 ]);
 
+// nvidia/nemotron-3.5-lightning-30b-a3b is NVIDIA's current Build/NIM agentic
+// reasoning model (OpenAI-compatible, served from integrate.api.nvidia.com).
+// It replaces the earlier nvidia/llama-3.1-nemotron-70b-instruct default.
 export const DEFAULT_BRAIN_MODELS = Object.freeze({
-    nvidia: 'nvidia/llama-3.1-nemotron-70b-instruct',
+    nvidia: 'nvidia/nemotron-3.5-lightning-30b-a3b',
     gemini: 'gemini-3.7-flash',
     groq: 'openai/gpt-oss-120b',
     openrouter: 'openrouter/free',
@@ -43,11 +46,17 @@ export const DEFAULT_BRAIN_MODELS = Object.freeze({
 });
 
 const PROVIDER_DEFINITIONS = Object.freeze({
+    // NVIDIA_BRAIN_MODEL is the preferred configuration variable so it can
+    // never be confused with a future NVIDIA media-generation model variable
+    // (see NVIDIA_IMAGE_MODEL in nvidiaCreatorProvider.js). NVIDIA_MODEL is
+    // read as a backward-compatible fallback for deployments configured
+    // before NVIDIA_BRAIN_MODEL existed.
     nvidia: Object.freeze({
         id: 'nvidia',
         label: 'NVIDIA NIM',
         keyVariable: 'NVIDIA_API_KEY',
-        modelVariable: 'NVIDIA_MODEL',
+        modelVariable: 'NVIDIA_BRAIN_MODEL',
+        legacyModelVariable: 'NVIDIA_MODEL',
     }),
     gemini: Object.freeze({
         id: 'gemini',
@@ -120,8 +129,8 @@ function strictBoolean(value, fallback) {
     return { error: 'BRAIN_ENABLE_AUTOMATIC_FALLBACK must be true or false.' };
 }
 
-function strictAttempts(value) {
-    if (value == null || value === '') return { value: 3 };
+function strictAttempts(value, defaultValue) {
+    if (value == null || value === '') return { value: defaultValue };
     const parsed = Number(value);
     if (!Number.isInteger(parsed) || parsed < 1 || parsed > BRAIN_PROVIDER_IDS.length) {
         return { error: `BRAIN_MAX_ATTEMPTS must be an integer from 1 to ${BRAIN_PROVIDER_IDS.length}.` };
@@ -131,7 +140,10 @@ function strictAttempts(value) {
 
 function modelFor(provider, env) {
     const definition = PROVIDER_DEFINITIONS[provider];
-    return normalizedSecret(env[definition.modelVariable]) || DEFAULT_BRAIN_MODELS[provider];
+    const legacy = definition.legacyModelVariable ? env[definition.legacyModelVariable] : null;
+    return normalizedSecret(env[definition.modelVariable]) ||
+        normalizedSecret(legacy) ||
+        DEFAULT_BRAIN_MODELS[provider];
 }
 
 function providerKey(provider, env) {
@@ -149,7 +161,6 @@ function parseSensitivityProviders(env, sensitivity) {
 export function getBrainConfiguration(env = process.env) {
     const selectedProvider = normalizedSecret(env.BRAIN_PROVIDER).toLowerCase() || 'nvidia';
     const fallback = strictBoolean(env.BRAIN_ENABLE_AUTOMATIC_FALLBACK, true);
-    const attempts = strictAttempts(env.BRAIN_MAX_ATTEMPTS);
     const rawFallbackEntries = typeof env.BRAIN_FALLBACK_ORDER === 'string'
         ? env.BRAIN_FALLBACK_ORDER.split(',').map((entry) => entry.trim().toLowerCase()).filter(Boolean)
         : [];
@@ -168,12 +179,17 @@ export function getBrainConfiguration(env = process.env) {
         errors.push('BRAIN_FALLBACK_ORDER contains an unsupported provider.');
     }
     if (fallback.error) errors.push(fallback.error);
-    if (attempts.error) errors.push(attempts.error);
 
     const fallbackOrder = [];
     for (const provider of [selectedProvider, ...configuredOrder]) {
         if (BRAIN_PROVIDER_IDS.includes(provider) && !fallbackOrder.includes(provider)) fallbackOrder.push(provider);
     }
+
+    // Default to attempting the complete configured chain (e.g. NVIDIA →
+    // Gemini → Groq → OpenRouter → Anthropic) rather than an arbitrary cap.
+    // BRAIN_MAX_ATTEMPTS remains available to explicitly cap the chain.
+    const attempts = strictAttempts(env.BRAIN_MAX_ATTEMPTS, fallbackOrder.length || 1);
+    if (attempts.error) errors.push(attempts.error);
 
     return Object.freeze({
         selectedProvider,
@@ -825,17 +841,28 @@ export async function reasonWithBrain(request, {
         );
     }
 
+    // A provider missing its API key is skipped (not a hard failure) whenever
+    // automatic fallback is permitted for this request, so a misconfigured
+    // primary provider cannot take down the whole chain. It still fails
+    // closed immediately when fallback is disabled, when the caller pinned
+    // an explicit providerOverride (an explicit request for one provider is
+    // never silently rerouted), or once every eligible provider is exhausted.
+    const canSkipMissingKey = configuration.automaticFallback && normalized.fallbackAllowed && !providerOverride;
     const attemptedProviders = [];
     let lastError = null;
-    for (const provider of order.slice(0, configuration.maxAttempts)) {
+    for (const provider of order) {
+        if (attemptedProviders.length >= configuration.maxAttempts) break;
         const key = providerKey(provider, env);
         if (!key) {
-            throw new BrainRouterError(
-                'provider_configuration_missing',
-                `${PROVIDER_DEFINITIONS[provider].label} is not configured.`,
-                503,
-                { provider, attemptedProviders },
-            );
+            if (!canSkipMissingKey) {
+                throw new BrainRouterError(
+                    'provider_configuration_missing',
+                    `${PROVIDER_DEFINITIONS[provider].label} is not configured.`,
+                    503,
+                    { provider, attemptedProviders },
+                );
+            }
+            continue;
         }
         attemptedProviders.push(provider);
         try {
@@ -864,7 +891,10 @@ export async function reasonWithBrain(request, {
         lastError.attemptedProviders = [...attemptedProviders];
         throw lastError;
     }
-    throw new BrainRouterError('brain_unavailable', 'No eligible reasoning provider could be attempted.', 503, {
-        attemptedProviders,
-    });
+    throw new BrainRouterError(
+        'provider_configuration_missing',
+        'No eligible reasoning provider is configured.',
+        503,
+        { attemptedProviders },
+    );
 }

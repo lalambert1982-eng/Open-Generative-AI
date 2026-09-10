@@ -10,6 +10,7 @@ import {
     ANTHROPIC_ASSISTANT_TOOL_ID,
     BRAIN_REASONING_TOOL_ID,
     ELEVENLABS_VOICE_TOOL_ID,
+    NVIDIA_IMAGE_TOOL_ID,
     OPENAI_IMAGE_TOOL_ID,
     RUNWAY_VIDEO_TOOL_ID,
 } from './creatorToolRegistry.js';
@@ -24,6 +25,10 @@ import {
     getMuapiGenerationJob,
     muapiProviderStatus,
 } from './muapiCreatorProvider.js';
+import {
+    createNvidiaImageGeneration,
+    nvidiaImageProviderStatus,
+} from './nvidiaCreatorProvider.js';
 import { checkRateLimit } from './rateLimit.js';
 import { CreatorProjectError, getCreatorProject } from './creatorProjectStore.js';
 import {
@@ -329,6 +334,10 @@ function generationProviderStatuses(env) {
             tested: false,
             productionReady: false,
         },
+        {
+            ...nvidiaImageProviderStatus(env),
+            productionReady: false,
+        },
     ];
 }
 
@@ -541,6 +550,36 @@ export async function handleOpenAiImage(request, {
             'content-disposition': 'inline; filename="creator-studio-image.png"',
             'x-generation-provider': 'openai',
             'x-creator-tool-id': OPENAI_IMAGE_TOOL_ID,
+        }),
+    });
+}
+
+export async function handleNvidiaImage(request, {
+    env = process.env,
+    fetchImpl = fetch,
+} = {}) {
+    const auth = authorizeCreatorRequest(request, { env, action: 'nvidia-image' });
+    if (auth.response) return auth.response;
+    const parsed = await parseCreatorJson(request, { env });
+    if (parsed.response) return parsed.response;
+
+    const result = await createNvidiaImageGeneration(parsed.value, { env, fetchImpl });
+    if (!result.ok) {
+        return creatorJson({
+            error: result.error,
+            ...(Array.isArray(result.missing) ? { missing: result.missing } : {}),
+            ...(result.detail ? { detail: result.detail } : {}),
+        }, result.status || 502);
+    }
+
+    return new Response(result.job.image, {
+        status: 200,
+        headers: creatorHeaders({
+            'content-type': result.job.contentType,
+            'content-disposition': 'inline; filename="creator-studio-nvidia-image.png"',
+            'x-generation-provider': 'nvidia',
+            'x-creator-tool-id': NVIDIA_IMAGE_TOOL_ID,
+            'x-generation-kind': result.job.kind,
         }),
     });
 }

@@ -176,6 +176,52 @@ test('NVIDIA NIM adapter uses the OpenAI-compatible endpoint', async () => {
     assert.equal(result.text, 'NVIDIA plan');
 });
 
+test('NVIDIA brain model defaults to the current Build/NIM agentic reasoning model', async () => {
+    let captured;
+    const env = { ...baseEnv, BRAIN_PROVIDER: 'nvidia', BRAIN_ENABLE_AUTOMATIC_FALLBACK: 'false' };
+    delete env.NVIDIA_MODEL;
+    await reasonWithBrain(request, {
+        env,
+        fetchImpl: async (url, options) => {
+            captured = { url, options };
+            return compatibleSuccess('nvidia');
+        },
+    });
+    assert.equal(JSON.parse(captured.options.body).model, 'nvidia/nemotron-3.5-lightning-30b-a3b');
+});
+
+test('NVIDIA_BRAIN_MODEL is the preferred configuration variable and takes precedence over legacy NVIDIA_MODEL', async () => {
+    let captured;
+    await reasonWithBrain(request, {
+        env: {
+            ...baseEnv,
+            BRAIN_PROVIDER: 'nvidia',
+            BRAIN_ENABLE_AUTOMATIC_FALLBACK: 'false',
+            NVIDIA_MODEL: 'nvidia/llama-3.1-nemotron-70b-instruct',
+            NVIDIA_BRAIN_MODEL: 'nvidia/nemotron-3.5-lightning-30b-a3b',
+        },
+        fetchImpl: async (url, options) => {
+            captured = { url, options };
+            return compatibleSuccess('nvidia');
+        },
+    });
+    assert.equal(JSON.parse(captured.options.body).model, 'nvidia/nemotron-3.5-lightning-30b-a3b');
+});
+
+test('legacy NVIDIA_MODEL still configures the NVIDIA brain when NVIDIA_BRAIN_MODEL is unset', async () => {
+    let captured;
+    const env = { ...baseEnv, BRAIN_PROVIDER: 'nvidia', BRAIN_ENABLE_AUTOMATIC_FALLBACK: 'false' };
+    delete env.NVIDIA_BRAIN_MODEL;
+    await reasonWithBrain(request, {
+        env,
+        fetchImpl: async (url, options) => {
+            captured = { url, options };
+            return compatibleSuccess('nvidia');
+        },
+    });
+    assert.equal(JSON.parse(captured.options.body).model, 'nvidia/llama-3.1-nemotron-70b-instruct');
+});
+
 test('the brain defaults to NVIDIA as primary with Gemini, Groq, OpenRouter, then Anthropic as fallbacks', () => {
     const configuration = getBrainConfiguration({
         NVIDIA_API_KEY: 'x',
@@ -186,6 +232,67 @@ test('the brain defaults to NVIDIA as primary with Gemini, Groq, OpenRouter, the
     });
     assert.equal(configuration.selectedProvider, 'nvidia');
     assert.deepEqual(configuration.fallbackOrder, ['nvidia', 'gemini', 'groq', 'openrouter', 'anthropic']);
+});
+
+test('BRAIN_MAX_ATTEMPTS defaults to the length of the complete configured provider chain', () => {
+    const fullChain = getBrainConfiguration({
+        NVIDIA_API_KEY: 'x',
+        GEMINI_API_KEY: 'x',
+        GROQ_API_KEY: 'x',
+        OPENROUTER_API_KEY: 'x',
+        ANTHROPIC_API_KEY: 'x',
+    });
+    assert.equal(fullChain.maxAttempts, 5);
+
+    const shortChain = getBrainConfiguration({
+        BRAIN_PROVIDER: 'gemini',
+        BRAIN_FALLBACK_ORDER: 'gemini,groq',
+        GEMINI_API_KEY: 'x',
+        GROQ_API_KEY: 'x',
+    });
+    assert.equal(shortChain.maxAttempts, 2);
+
+    const explicit = getBrainConfiguration({
+        NVIDIA_API_KEY: 'x',
+        GEMINI_API_KEY: 'x',
+        BRAIN_MAX_ATTEMPTS: '1',
+    });
+    assert.equal(explicit.maxAttempts, 1);
+});
+
+test('the default fallback chain reaches OpenRouter and Anthropic without an explicit BRAIN_MAX_ATTEMPTS override', async () => {
+    const fullChainEnv = {
+        NVIDIA_API_KEY: 'nvidia-test-provider-secret',
+        GEMINI_API_KEY: 'gemini-test-provider-secret',
+        GROQ_API_KEY: 'groq-test-provider-secret',
+        OPENROUTER_API_KEY: 'openrouter-test-provider-secret',
+        ANTHROPIC_API_KEY: 'anthropic-test-provider-secret',
+    };
+    const calls = [];
+    const result = await reasonWithBrain(request, {
+        env: fullChainEnv,
+        fetchImpl: async (url) => {
+            calls.push(url);
+            if (calls.length < 5) {
+                return new Response(JSON.stringify({ error: { message: 'temporarily unavailable' } }), { status: 503 });
+            }
+            return new Response(JSON.stringify({
+                model: 'claude-sonnet-5',
+                content: [{ type: 'text', text: 'Anthropic plan reached via full default fallback' }],
+                stop_reason: 'end_turn',
+                usage: { input_tokens: 5, output_tokens: 5 },
+            }), { status: 200 });
+        },
+    });
+    assert.equal(result.provider, 'anthropic');
+    assert.equal(calls.length, 5);
+    assert.deepEqual(calls, [
+        'https://integrate.api.nvidia.com/v1/chat/completions',
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent',
+        'https://api.groq.com/openai/v1/chat/completions',
+        'https://openrouter.ai/api/v1/chat/completions',
+        'https://api.anthropic.com/v1/messages',
+    ]);
 });
 
 test('a Gemini quota response falls back once to Groq', async () => {
@@ -350,14 +457,75 @@ test('internal brain callers retain the repository content-safety boundary', asy
     assert.equal(calls, 0);
 });
 
-test('missing primary configuration stops instead of silently sending work elsewhere', async () => {
+test('a missing primary API key is skipped in favor of the next configured provider when fallback is enabled', async () => {
+    const calls = [];
+    const result = await reasonWithBrain(request, {
+        env: { ...baseEnv, BRAIN_PROVIDER: 'nvidia', NVIDIA_API_KEY: '', BRAIN_FALLBACK_ORDER: 'gemini,groq,openrouter' },
+        fetchImpl: async (url) => {
+            calls.push(url);
+            return geminiSuccess('Gemini plan via fallback');
+        },
+    });
+    assert.equal(result.provider, 'gemini');
+    assert.deepEqual(calls, ['https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent']);
+});
+
+test('a missing primary API key fails closed immediately when automatic fallback is disabled', async () => {
     let calls = 0;
     await assert.rejects(
         reasonWithBrain(request, {
-            env: { ...baseEnv, GEMINI_API_KEY: '' },
+            env: { ...baseEnv, GEMINI_API_KEY: '', BRAIN_ENABLE_AUTOMATIC_FALLBACK: 'false' },
             fetchImpl: async () => { calls += 1; return compatibleSuccess('groq'); },
         }),
         (error) => error.code === 'provider_configuration_missing' && error.provider === 'gemini',
+    );
+    assert.equal(calls, 0);
+});
+
+test('an explicit providerOverride with a missing key fails closed instead of silently rerouting', async () => {
+    let calls = 0;
+    await assert.rejects(
+        reasonWithBrain(request, {
+            env: { ...baseEnv, NVIDIA_API_KEY: '' },
+            providerOverride: 'nvidia',
+            fetchImpl: async () => { calls += 1; return compatibleSuccess('groq'); },
+        }),
+        (error) => error.code === 'provider_configuration_missing' && error.provider === 'nvidia',
+    );
+    assert.equal(calls, 0);
+});
+
+test('missing keys across the whole eligible chain fail clearly once no configured provider remains', async () => {
+    let calls = 0;
+    await assert.rejects(
+        reasonWithBrain(request, {
+            env: {
+                ...baseEnv,
+                GEMINI_API_KEY: '',
+                GROQ_API_KEY: '',
+                OPENROUTER_API_KEY: '',
+                BRAIN_FALLBACK_ORDER: 'gemini,groq,openrouter',
+            },
+            fetchImpl: async () => { calls += 1; return geminiSuccess(); },
+        }),
+        (error) => error.code === 'provider_configuration_missing' && error.attemptedProviders.length === 0,
+    );
+    assert.equal(calls, 0);
+});
+
+test('a missing key combined with a sensitivity-restricted chain fails clearly without broadening eligibility', async () => {
+    let calls = 0;
+    await assert.rejects(
+        reasonWithBrain({ ...request, sensitivity: 'PRIVATE' }, {
+            env: {
+                ...baseEnv,
+                BRAIN_PROVIDER: 'nvidia',
+                NVIDIA_API_KEY: '',
+                BRAIN_PRIVATE_ELIGIBLE_PROVIDERS: 'nvidia',
+            },
+            fetchImpl: async () => { calls += 1; return geminiSuccess(); },
+        }),
+        (error) => error.code === 'provider_configuration_missing',
     );
     assert.equal(calls, 0);
 });
