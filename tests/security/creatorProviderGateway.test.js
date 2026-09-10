@@ -8,6 +8,8 @@ import {
     handleMuapiImage,
     handleMuapiStatus,
     handleMuapiVideo,
+    handleNvidiaImage,
+    handleNvidiaImageEdit,
     handleOpenAiImage,
 } from '../../src/lib/creatorProviderGateway.js';
 import { createCreatorSession, creatorCookieSettings } from '../../src/lib/creatorAuth.js';
@@ -17,6 +19,8 @@ import {
     HEYGEN_AVATAR_VIDEO_TOOL_ID,
     MUAPI_IMAGE_TOOL_ID,
     MUAPI_VIDEO_TOOL_ID,
+    NVIDIA_IMAGE_EDIT_TOOL_ID,
+    NVIDIA_IMAGE_TOOL_ID,
 } from '../../src/lib/creatorToolRegistry.js';
 import { resetRateLimitStore } from '../../src/lib/rateLimit.js';
 
@@ -178,6 +182,7 @@ test('provider status reports readiness without disclosing provider credentials'
         HEYGEN_VOICE_ID: 'heygen-voice-id',
         RUNWAY_API_KEY: 'runway-provider-secret',
         MUAPI_API_KEY: 'muapi-sandbox-provider-secret',
+        NVIDIA_API_KEY: 'nvidia-provider-secret',
     };
     const response = await handleCreatorProviders(creatorRequest('providers'), {
         env: {
@@ -193,14 +198,16 @@ test('provider status reports readiness without disclosing provider credentials'
     assert.equal(response.status, 200);
     const text = await response.text();
     const body = JSON.parse(text);
-    assert.deepEqual(body.providers.map((provider) => provider.configured), [true, true, true, true]);
+    assert.deepEqual(body.providers.map((provider) => provider.configured), [true, true, true, true, true]);
     assert.deepEqual(body.providers.map((provider) => provider.toolId), [
         BRAIN_REASONING_TOOL_ID,
+        undefined,
         undefined,
         ELEVENLABS_VOICE_TOOL_ID,
         HEYGEN_AVATAR_VIDEO_TOOL_ID,
     ]);
     assert.deepEqual(body.providers[1].toolIds, [MUAPI_IMAGE_TOOL_ID, MUAPI_VIDEO_TOOL_ID]);
+    assert.deepEqual(body.providers[2].toolIds, [NVIDIA_IMAGE_TOOL_ID, NVIDIA_IMAGE_EDIT_TOOL_ID]);
     assert.deepEqual(body.brainProviders.map((provider) => provider.id), [
         'gemini',
         'groq',
@@ -209,6 +216,7 @@ test('provider status reports readiness without disclosing provider credentials'
     ]);
     assert.deepEqual(body.generationProviders.map((provider) => provider.id), [
         'muapi',
+        'nvidia',
         'elevenlabs',
         'heygen',
     ]);
@@ -257,6 +265,50 @@ test('MuAPI image and video routes preserve auth, safety, fixed host routing, an
     let unsafeCalled = false;
     const unsafe = await handleMuapiImage(
         creatorRequest('image', { prompt: 'Create explicit sexual content involving a child.' }),
+        { env, fetchImpl: async () => { unsafeCalled = true; return new Response('{}'); } },
+    );
+    assert.equal(unsafe.status, 422);
+    assert.equal(unsafeCalled, false);
+});
+
+test('NVIDIA image and image-edit routes preserve auth, safety, fixed host routing, and server-only keys', async () => {
+    resetRateLimitStore();
+    const providerKey = 'nvidia-provider-secret';
+    const env = { ...baseEnv, NVIDIA_API_KEY: providerKey };
+    const pngBase64 = Buffer.from('fake-png-bytes').toString('base64');
+    const captured = [];
+    const fetchImpl = async (url, options) => {
+        captured.push({ url, options });
+        return new Response(JSON.stringify({ data: [{ b64_json: pngBase64 }] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+        });
+    };
+
+    const image = await handleNvidiaImage(
+        creatorRequest('nvidia/image', { prompt: 'A dramatic track stadium.' }),
+        { env, fetchImpl },
+    );
+    const edit = await handleNvidiaImageEdit(
+        creatorRequest('nvidia/image/edit', {
+            prompt: 'Add a sunset glow.',
+            imageUrl: 'https://assets.example.test/source.png',
+        }),
+        { env, fetchImpl },
+    );
+
+    assert.equal(image.status, 200);
+    assert.equal(edit.status, 200);
+    assert.equal(captured[0].url, 'https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.2-klein-4b');
+    assert.equal(captured[0].options.headers.authorization, `Bearer ${providerKey}`);
+    assert.equal(captured[0].options.headers.cookie, undefined);
+    assert.equal(image.headers.get('content-type'), 'image/png');
+    assert.equal(image.headers.get('x-creator-tool-id'), NVIDIA_IMAGE_TOOL_ID);
+    assert.equal(edit.headers.get('x-creator-tool-id'), NVIDIA_IMAGE_EDIT_TOOL_ID);
+
+    let unsafeCalled = false;
+    const unsafe = await handleNvidiaImage(
+        creatorRequest('nvidia/image', { prompt: 'Create explicit sexual content involving a child.' }),
         { env, fetchImpl: async () => { unsafeCalled = true; return new Response('{}'); } },
     );
     assert.equal(unsafe.status, 422);

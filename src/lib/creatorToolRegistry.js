@@ -5,6 +5,8 @@ export const MUAPI_VIDEO_TOOL_ID = 'muapi_video';
 export const OPENAI_IMAGE_TOOL_ID = 'openai_image';
 export const ELEVENLABS_VOICE_TOOL_ID = 'elevenlabs_voice';
 export const HEYGEN_AVATAR_VIDEO_TOOL_ID = 'heygen_avatar_video';
+export const NVIDIA_IMAGE_TOOL_ID = 'nvidia_image';
+export const NVIDIA_IMAGE_EDIT_TOOL_ID = 'nvidia_image_edit';
 export const RUNWAY_VIDEO_TOOL_ID = 'runway_video';
 export const YOUTUBE_PUBLISH_TOOL_ID = 'youtube_publish';
 export const INSTAGRAM_PUBLISH_TOOL_ID = 'instagram_publish';
@@ -127,6 +129,26 @@ export const HEYGEN_AVATAR_VIDEO_TOOL = Object.freeze({
     ]),
 });
 
+export const NVIDIA_IMAGE_TOOL = Object.freeze({
+    id: NVIDIA_IMAGE_TOOL_ID,
+    provider: 'nvidia',
+    label: 'NVIDIA NIM Image Generation',
+    purpose: 'Generate one approved image through the server-owned NVIDIA NIM adapter.',
+    asynchronous: false,
+    accepts: Object.freeze(['prompt', 'size']),
+    returns: Object.freeze(['provider', 'toolId', 'contentType', 'image', 'error']),
+});
+
+export const NVIDIA_IMAGE_EDIT_TOOL = Object.freeze({
+    id: NVIDIA_IMAGE_EDIT_TOOL_ID,
+    provider: 'nvidia',
+    label: 'NVIDIA NIM Image Editing',
+    purpose: 'Edit an approved source image from a prompt through the server-owned NVIDIA NIM adapter.',
+    asynchronous: false,
+    accepts: Object.freeze(['prompt', 'imageUrl', 'size']),
+    returns: Object.freeze(['provider', 'toolId', 'contentType', 'image', 'error']),
+});
+
 export const RUNWAY_VIDEO_TOOL = Object.freeze({
     id: RUNWAY_VIDEO_TOOL_ID,
     provider: 'runway',
@@ -213,6 +235,8 @@ const CREATOR_TOOL_REGISTRY = Object.freeze({
     [MUAPI_IMAGE_TOOL_ID]: MUAPI_IMAGE_TOOL,
     [MUAPI_VIDEO_TOOL_ID]: MUAPI_VIDEO_TOOL,
     [OPENAI_IMAGE_TOOL_ID]: OPENAI_IMAGE_TOOL,
+    [NVIDIA_IMAGE_TOOL_ID]: NVIDIA_IMAGE_TOOL,
+    [NVIDIA_IMAGE_EDIT_TOOL_ID]: NVIDIA_IMAGE_EDIT_TOOL,
     [ELEVENLABS_VOICE_TOOL_ID]: ELEVENLABS_VOICE_TOOL,
     [HEYGEN_AVATAR_VIDEO_TOOL_ID]: HEYGEN_AVATAR_VIDEO_TOOL,
     [RUNWAY_VIDEO_TOOL_ID]: RUNWAY_VIDEO_TOOL,

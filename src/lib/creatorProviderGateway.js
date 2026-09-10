@@ -10,6 +10,8 @@ import {
     ANTHROPIC_ASSISTANT_TOOL_ID,
     BRAIN_REASONING_TOOL_ID,
     ELEVENLABS_VOICE_TOOL_ID,
+    NVIDIA_IMAGE_EDIT_TOOL_ID,
+    NVIDIA_IMAGE_TOOL_ID,
     OPENAI_IMAGE_TOOL_ID,
     RUNWAY_VIDEO_TOOL_ID,
 } from './creatorToolRegistry.js';
@@ -24,6 +26,11 @@ import {
     getMuapiGenerationJob,
     muapiProviderStatus,
 } from './muapiCreatorProvider.js';
+import {
+    createNvidiaImageEditJob,
+    createNvidiaImageJob,
+    nvidiaProviderStatus,
+} from './nvidiaProvider.js';
 import { checkRateLimit } from './rateLimit.js';
 import { CreatorProjectError, getCreatorProject } from './creatorProjectStore.js';
 import {
@@ -302,9 +309,17 @@ function muapiResultResponse(result) {
 function generationProviderStatuses(env) {
     const heyGen = heyGenProviderStatus(env);
     const muapi = muapiProviderStatus(env);
+    const nvidia = nvidiaProviderStatus(env);
     return [
         {
             ...muapi,
+            category: 'generation',
+            built: true,
+            tested: false,
+            productionReady: false,
+        },
+        {
+            ...nvidia,
             category: 'generation',
             built: true,
             tested: false,
@@ -543,6 +558,49 @@ export async function handleOpenAiImage(request, {
             'x-creator-tool-id': OPENAI_IMAGE_TOOL_ID,
         }),
     });
+}
+
+function nvidiaImageResponse(result, toolId) {
+    if (!result.ok) {
+        return creatorJson({
+            error: result.error,
+            ...(Array.isArray(result.missing) ? { missing: result.missing } : {}),
+            ...(result.detail ? { detail: result.detail } : {}),
+        }, result.status || 502);
+    }
+    return new Response(result.image.bytes, {
+        status: 200,
+        headers: creatorHeaders({
+            'content-type': result.image.contentType,
+            'content-disposition': 'inline; filename="creator-studio-image.png"',
+            'x-generation-provider': 'nvidia',
+            'x-creator-tool-id': toolId,
+        }),
+    });
+}
+
+export async function handleNvidiaImage(request, {
+    env = process.env,
+    fetchImpl = fetch,
+} = {}) {
+    const auth = authorizeCreatorRequest(request, { env, action: 'nvidia-image' });
+    if (auth.response) return auth.response;
+    const parsed = await parseCreatorJson(request, { env });
+    if (parsed.response) return parsed.response;
+    const result = await createNvidiaImageJob(parsed.value, { env, fetchImpl });
+    return nvidiaImageResponse(result, NVIDIA_IMAGE_TOOL_ID);
+}
+
+export async function handleNvidiaImageEdit(request, {
+    env = process.env,
+    fetchImpl = fetch,
+} = {}) {
+    const auth = authorizeCreatorRequest(request, { env, action: 'nvidia-image-edit' });
+    if (auth.response) return auth.response;
+    const parsed = await parseCreatorJson(request, { env });
+    if (parsed.response) return parsed.response;
+    const result = await createNvidiaImageEditJob(parsed.value, { env, fetchImpl });
+    return nvidiaImageResponse(result, NVIDIA_IMAGE_EDIT_TOOL_ID);
 }
 
 export async function handleMuapiImage(request, {

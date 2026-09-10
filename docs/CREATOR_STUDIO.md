@@ -31,7 +31,12 @@ The direct OpenAI image and Runway video adapters remain in the repository as de
 
 ### NVIDIA NIM
 
-NVIDIA image generation and image editing are recorded as **implemented** on the reviewed NVIDIA feature branch. `NVIDIA_API_KEY` is a server-only secret and must never be exposed to the browser, matching every other provider credential in this document. `NVIDIA_BRAIN_MODEL` and `NVIDIA_IMAGE_MODEL` default to `nvidia/nemotron-3.5-lightning-30b-a3b` and `flux-2-klein-4b`.
+- Routes: `POST /api/creator/nvidia/image` (generation) and `POST /api/creator/nvidia/image/edit` (editing)
+- Adapter: `src/lib/nvidiaProvider.js`; both routes return a synchronous PNG response, mirroring the existing OpenAI image handler
+- Default model: `flux-2-klein-4b`, mapped internally to the `black-forest-labs/flux.2-klein-4b` NIM path
+- Credential use: server-side `NVIDIA_API_KEY` only; never returned to the browser
+- Source/tests: built and unit-tested (`tests/security/nvidiaProvider.test.js`, plus gateway/registry coverage) with a mocked provider; no real `NVIDIA_API_KEY` has been exercised
+- **Hosted contract not independently verified.** The request/response shape (base URL `https://ai.api.nvidia.com/v1/genai/<model>`, `model`/`prompt`/`size`/`image` fields, `b64_json` response) follows NVIDIA's documented "genai" and OpenAI-compatible image generation patterns, but this environment's network egress to every `nvidia.com`-family domain (`build.nvidia.com`, `docs.nvidia.com`, `docs.api.nvidia.com`) was blocked, so it could not be checked against NVIDIA's live API reference before shipping. Confirm the exact model path and field names there, with a real key in a disposable/sandboxed test, before treating this as Production ready.
 
 NVIDIA's current NIM documentation also describes Wan2.2 text-to-video and image-to-video capability. That capability is recorded here as **staged only** — no video endpoint, route, or tool-registry entry exists for it in this repository. It must not be implemented or claimed as active until the exact current hosted API contract available to this application (endpoint, auth, request/response shape, and account entitlement) is independently verified. Do not invent an NVIDIA video endpoint to fill this gap.
 
