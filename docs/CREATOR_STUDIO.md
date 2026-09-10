@@ -12,6 +12,7 @@ Creator Studio is the private creative operating-system shell. Selena is its pri
 | Secondary fallback | Groq | `GROQ_API_KEY` | `GROQ_MODEL` |
 | Tertiary development fallback | OpenRouter | `OPENROUTER_API_KEY` | `OPENROUTER_MODEL` |
 | Optional premium / legacy assistant | Anthropic | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` |
+| Optional | NVIDIA NIM | `NVIDIA_API_KEY` (server-only) | `NVIDIA_BRAIN_MODEL` (default `nvidia/nemotron-3.5-lightning-30b-a3b`) |
 
 ### Generation and publishing providers
 
@@ -23,8 +24,16 @@ Creator Studio is the private creative operating-system shell. Selena is its pri
 | Storyboard text/image-to-video | MuAPI | Sandbox: `MUAPI_API_KEY`; paid Production: `MUAPI_PRODUCTION_API_KEY`; plus `MUAPI_KEY_MODE` and `MUAPI_ALLOW_PAID_GENERATION` |
 | Manual private publishing | YouTube + Vercel Blob | `YOUTUBE_OAUTH_CLIENT_ID`, `YOUTUBE_OAUTH_CLIENT_SECRET`, `YOUTUBE_OAUTH_CALLBACK_URL`, `YOUTUBE_TOKEN_ENCRYPTION_KEY`, `BLOB_READ_WRITE_TOKEN` |
 | Instagram/TikTok publishing | MuAPI Social | `MUAPI_SOCIAL_API_KEY` or `MUAPI_PRODUCTION_API_KEY`; `MUAPI_ALLOW_SOCIAL_PUBLISHING`; optional host/public-TikTok controls |
+| Image generation and image editing | NVIDIA NIM | `NVIDIA_API_KEY` (server-only), `NVIDIA_IMAGE_MODEL` (default `flux-2-klein-4b`) |
+| Text-to-video / image-to-video | NVIDIA NIM | **Staged only.** No variable is wired to a video call. |
 
 The direct OpenAI image and Runway video adapters remain in the repository as deferred compatibility boundaries. They are not reachable from the active private Creator Studio dispatch or UI.
+
+### NVIDIA NIM
+
+NVIDIA image generation and image editing are recorded as **implemented** on the reviewed NVIDIA feature branch. `NVIDIA_API_KEY` is a server-only secret and must never be exposed to the browser, matching every other provider credential in this document. `NVIDIA_BRAIN_MODEL` and `NVIDIA_IMAGE_MODEL` default to `nvidia/nemotron-3.5-lightning-30b-a3b` and `flux-2-klein-4b`.
+
+NVIDIA's current NIM documentation also describes Wan2.2 text-to-video and image-to-video capability. That capability is recorded here as **staged only** — no video endpoint, route, or tool-registry entry exists for it in this repository. It must not be implemented or claimed as active until the exact current hosted API contract available to this application (endpoint, auth, request/response shape, and account entitlement) is independently verified. Do not invent an NVIDIA video endpoint to fill this gap.
 
 All provider credentials are read only by the Next.js server. They are never sent to the browser, returned by the provider-status endpoint, or committed to the repository.
 
