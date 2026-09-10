@@ -60,7 +60,11 @@ The server-only router in `src/lib/brainRouter.js` gives the existing Creator St
 ```text
 Selena / existing agent
   -> Brain Router
-  -> Gemini | Groq | OpenRouter | Anthropic
+  -> NVIDIA (primary)
+     -> Gemini fallback
+     -> Groq fallback
+     -> OpenRouter fallback
+     -> Anthropic fallback
   -> normalized reasoning result
   -> existing agent or approved tool workflow
 ```
@@ -71,7 +75,7 @@ The Creator assistant route adds a server-owned structured orchestration contrac
 
 When a Project ID is supplied, the server loads the Project using the authenticated owner identity. The prompt receives only bounded Project/Storyboard/Asset summaries. Browser-supplied Project context, media URLs, and provider metadata are not trusted as Selena context.
 
-The initial order is `gemini,groq,openrouter`. Anthropic remains fully supported through the existing `anthropic_assistant` compatibility boundary and can be selected with `BRAIN_PROVIDER=anthropic` or added later to `BRAIN_FALLBACK_ORDER`. It is intentionally absent from the initial fallback list.
+`NVIDIA` (via NVIDIA NIM) is the primary provider. The fallback order is `gemini,groq,openrouter,anthropic`. Anthropic remains fully supported through the existing `anthropic_assistant` compatibility boundary and can also be selected directly with `BRAIN_PROVIDER=anthropic`.
 
 Automatic fallback is bounded by `BRAIN_MAX_ATTEMPTS`. It is allowed for timeouts, transient provider failures, rate/quota limits, malformed provider responses, and explicitly unsupported capabilities. It is not allowed for safety rejection, invalid input, invalid/missing credentials, or requests marked as publishing, paid generation, another external mutation, or requiring explicit approval.
 
@@ -81,27 +85,29 @@ The requested model identifiers were verified against current official documenta
 
 ### Preview brain configuration
 
-Add these three values as **Secret/Sensitive** variables in Vercel Preview. Each key comes from its own provider and must not be reused:
+Add these four values as **Secret/Sensitive** variables in Vercel Preview. Each key comes from its own provider and must not be reused:
 
 ```dotenv
+NVIDIA_API_KEY=
 GEMINI_API_KEY=
 GROQ_API_KEY=
 OPENROUTER_API_KEY=
 ```
 
-Add these seven values as normal non-secret Preview configuration:
+Add these nine values as normal non-secret Preview configuration:
 
 ```dotenv
-BRAIN_PROVIDER=gemini
+BRAIN_PROVIDER=nvidia
+NVIDIA_MODEL=nvidia/llama-3.1-nemotron-70b-instruct
 GEMINI_MODEL=gemini-3.7-flash
 GROQ_MODEL=openai/gpt-oss-120b
 OPENROUTER_MODEL=openrouter/free
-BRAIN_FALLBACK_ORDER=gemini,groq,openrouter
+BRAIN_FALLBACK_ORDER=gemini,groq,openrouter,anthropic
 BRAIN_ENABLE_AUTOMATIC_FALLBACK=true
 BRAIN_MAX_ATTEMPTS=3
 ```
 
-Do not copy the three Preview API-key values into Production automatically. After mocked/local validation and an explicitly approved Preview test, Production needs the same variable **names** in its own environment: `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `BRAIN_PROVIDER`, `GEMINI_MODEL`, `GROQ_MODEL`, `OPENROUTER_MODEL`, `BRAIN_FALLBACK_ORDER`, `BRAIN_ENABLE_AUTOMATIC_FALLBACK`, and `BRAIN_MAX_ATTEMPTS`. Production configuration and deployment require separate approval.
+Do not copy the four Preview API-key values into Production automatically. After mocked/local validation and an explicitly approved Preview test, Production needs the same variable **names** in its own environment: `NVIDIA_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `BRAIN_PROVIDER`, `NVIDIA_MODEL`, `GEMINI_MODEL`, `GROQ_MODEL`, `OPENROUTER_MODEL`, `BRAIN_FALLBACK_ORDER`, `BRAIN_ENABLE_AUTOMATIC_FALLBACK`, and `BRAIN_MAX_ATTEMPTS`. Production configuration and deployment require separate approval.
 
 ## Configure Greg's HeyGen Digital Twin
 
@@ -205,8 +211,8 @@ The defaults are listed in `.env.example`:
 - `CREATOR_SESSION_TTL_SECONDS=28800` limits a signed Studio session to eight hours. The code caps sessions at 24 hours.
 - `CREATOR_STUDIO_RATE_LIMIT=5` limits each generation action per minute for the signed-in GitHub identity.
 - `CREATOR_STUDIO_STATUS_RATE_LIMIT=120` permits provider task polling without relaxing generation limits.
-- `BRAIN_PROVIDER=gemini` selects the default reasoning provider without changing any agent.
-- `BRAIN_FALLBACK_ORDER=gemini,groq,openrouter` and `BRAIN_MAX_ATTEMPTS=3` bound the initial free/developer routing path.
+- `BRAIN_PROVIDER=nvidia` selects the default (primary) reasoning provider without changing any agent.
+- `BRAIN_FALLBACK_ORDER=gemini,groq,openrouter,anthropic` and `BRAIN_MAX_ATTEMPTS=3` bound the automatic fallback routing path.
 - `BRAIN_ENABLE_AUTOMATIC_FALLBACK=true` enables only the safe fallback cases described above.
 - `BRAIN_PRIVATE_ELIGIBLE_PROVIDERS` and `BRAIN_CLIENT_CONFIDENTIAL_ELIGIBLE_PROVIDERS` are empty by default so sensitive work fails closed.
 - `CONTENT_SAFETY_MODE=enforce` blocks the built-in high-risk content classes before any paid provider call. `audit` and `off` remain explicit operator choices.

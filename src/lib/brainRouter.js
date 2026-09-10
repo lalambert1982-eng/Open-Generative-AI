@@ -1,9 +1,16 @@
 import { evaluateJsonSafety } from './contentSafety.js';
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+const NVIDIA_API_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
+
+const OPENAI_COMPATIBLE_URLS = Object.freeze({
+    nvidia: NVIDIA_API_URL,
+    groq: GROQ_API_URL,
+    openrouter: OPENROUTER_API_URL,
+});
 
 const DEFAULT_TIMEOUT_MS = 45_000;
 const MAX_PROVIDER_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -13,6 +20,7 @@ const MAX_INSTRUCTIONS_CHARACTERS = 20_000;
 const MAX_TOOLS = 20;
 
 export const BRAIN_PROVIDER_IDS = Object.freeze([
+    'nvidia',
     'gemini',
     'groq',
     'openrouter',
@@ -27,6 +35,7 @@ export const BRAIN_SENSITIVITIES = Object.freeze([
 ]);
 
 export const DEFAULT_BRAIN_MODELS = Object.freeze({
+    nvidia: 'nvidia/llama-3.1-nemotron-70b-instruct',
     gemini: 'gemini-3.7-flash',
     groq: 'openai/gpt-oss-120b',
     openrouter: 'openrouter/free',
@@ -34,6 +43,12 @@ export const DEFAULT_BRAIN_MODELS = Object.freeze({
 });
 
 const PROVIDER_DEFINITIONS = Object.freeze({
+    nvidia: Object.freeze({
+        id: 'nvidia',
+        label: 'NVIDIA NIM',
+        keyVariable: 'NVIDIA_API_KEY',
+        modelVariable: 'NVIDIA_MODEL',
+    }),
     gemini: Object.freeze({
         id: 'gemini',
         label: 'Google Gemini',
@@ -132,14 +147,14 @@ function parseSensitivityProviders(env, sensitivity) {
 }
 
 export function getBrainConfiguration(env = process.env) {
-    const selectedProvider = normalizedSecret(env.BRAIN_PROVIDER).toLowerCase() || 'gemini';
+    const selectedProvider = normalizedSecret(env.BRAIN_PROVIDER).toLowerCase() || 'nvidia';
     const fallback = strictBoolean(env.BRAIN_ENABLE_AUTOMATIC_FALLBACK, true);
     const attempts = strictAttempts(env.BRAIN_MAX_ATTEMPTS);
     const rawFallbackEntries = typeof env.BRAIN_FALLBACK_ORDER === 'string'
         ? env.BRAIN_FALLBACK_ORDER.split(',').map((entry) => entry.trim().toLowerCase()).filter(Boolean)
         : [];
     const configuredOrder = env.BRAIN_FALLBACK_ORDER == null || env.BRAIN_FALLBACK_ORDER === ''
-        ? ['gemini', 'groq', 'openrouter']
+        ? ['gemini', 'groq', 'openrouter', 'anthropic']
         : parseProviderList(env.BRAIN_FALLBACK_ORDER);
     const errors = [];
 
@@ -615,7 +630,7 @@ function openAiResponseFormat(request) {
 
 async function callOpenAiCompatible(provider, request, { env, fetchImpl, model, key }) {
     const prompts = brainPrompts(request, env);
-    const url = provider === 'groq' ? GROQ_API_URL : OPENROUTER_API_URL;
+    const url = OPENAI_COMPATIBLE_URLS[provider];
     const body = {
         model,
         messages: [
@@ -721,6 +736,7 @@ async function callAnthropic(request, { env, fetchImpl, model, key }) {
 }
 
 const PROVIDER_CALLERS = Object.freeze({
+    nvidia: (request, options) => callOpenAiCompatible('nvidia', request, options),
     gemini: callGemini,
     groq: (request, options) => callOpenAiCompatible('groq', request, options),
     openrouter: (request, options) => callOpenAiCompatible('openrouter', request, options),

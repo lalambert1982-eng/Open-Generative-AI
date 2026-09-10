@@ -15,6 +15,8 @@ const baseEnv = {
     BRAIN_FALLBACK_ORDER: 'gemini,groq,openrouter',
     BRAIN_ENABLE_AUTOMATIC_FALLBACK: 'true',
     BRAIN_MAX_ATTEMPTS: '3',
+    NVIDIA_API_KEY: 'nvidia-test-provider-secret',
+    NVIDIA_MODEL: 'nvidia/llama-3.1-nemotron-70b-instruct',
     GEMINI_API_KEY: 'gemini-test-provider-secret',
     GEMINI_MODEL: 'gemini-3.7-flash',
     GROQ_API_KEY: 'groq-test-provider-secret',
@@ -155,6 +157,35 @@ test('Anthropic remains available through the normalized brain interface', async
     assert.equal(result.provider, 'anthropic');
     assert.equal(result.text, 'Anthropic plan');
     assert.deepEqual(result.usage, { inputTokens: 11, outputTokens: 7, totalTokens: 18 });
+});
+
+test('NVIDIA NIM adapter uses the OpenAI-compatible endpoint', async () => {
+    let captured;
+    const result = await reasonWithBrain(request, {
+        env: { ...baseEnv, BRAIN_PROVIDER: 'nvidia', BRAIN_ENABLE_AUTOMATIC_FALLBACK: 'false' },
+        fetchImpl: async (url, options) => {
+            captured = { url, options };
+            return compatibleSuccess('nvidia', 'NVIDIA plan');
+        },
+    });
+
+    assert.equal(captured.url, 'https://integrate.api.nvidia.com/v1/chat/completions');
+    assert.equal(captured.options.headers.authorization, `Bearer ${baseEnv.NVIDIA_API_KEY}`);
+    assert.equal(JSON.parse(captured.options.body).model, baseEnv.NVIDIA_MODEL);
+    assert.equal(result.provider, 'nvidia');
+    assert.equal(result.text, 'NVIDIA plan');
+});
+
+test('the brain defaults to NVIDIA as primary with Gemini, Groq, OpenRouter, then Anthropic as fallbacks', () => {
+    const configuration = getBrainConfiguration({
+        NVIDIA_API_KEY: 'x',
+        GEMINI_API_KEY: 'x',
+        GROQ_API_KEY: 'x',
+        OPENROUTER_API_KEY: 'x',
+        ANTHROPIC_API_KEY: 'x',
+    });
+    assert.equal(configuration.selectedProvider, 'nvidia');
+    assert.deepEqual(configuration.fallbackOrder, ['nvidia', 'gemini', 'groq', 'openrouter', 'anthropic']);
 });
 
 test('a Gemini quota response falls back once to Groq', async () => {
