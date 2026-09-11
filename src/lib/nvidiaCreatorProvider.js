@@ -11,7 +11,18 @@ const MAX_REFERENCE_IMAGE_BYTES = 8 * 1024 * 1024;
 // Base64 grows input by ~4/3; cap the encoded string a little above that.
 const MAX_REFERENCE_IMAGE_BASE64_CHARACTERS = Math.ceil(MAX_REFERENCE_IMAGE_BYTES * 1.4);
 
-const IMAGE_ASPECT_RATIOS = new Set(['1:1', '16:9', '9:16', '4:3', '3:4']);
+// Client-facing aspect ratios, mapped to the width/height pairs the verified
+// hosted contract actually accepts (the upstream API has no aspect-ratio
+// field). Each pair keeps the total pixel budget close to 1024x1024 on
+// 64px-aligned dimensions.
+const IMAGE_ASPECT_RATIO_DIMENSIONS = Object.freeze({
+    '1:1': Object.freeze({ width: 1024, height: 1024 }),
+    '16:9': Object.freeze({ width: 1344, height: 768 }),
+    '9:16': Object.freeze({ width: 768, height: 1344 }),
+    '4:3': Object.freeze({ width: 1024, height: 768 }),
+    '3:4': Object.freeze({ width: 768, height: 1024 }),
+});
+const IMAGE_ASPECT_RATIOS = new Set(Object.keys(IMAGE_ASPECT_RATIO_DIMENSIONS));
 const MIN_SEED = 0;
 const MAX_SEED = 4_294_967_295; // unsigned 32-bit range
 const MIN_STEPS = 1;
@@ -26,7 +37,9 @@ const NVIDIA_IMAGE_MODEL_REGISTRY = Object.freeze({
     'flux-2-klein-4b': Object.freeze({
         id: 'flux-2-klein-4b',
         // publisher/model path segment used to build the fixed upstream URL.
-        path: 'black-forest-labs/flux_2-klein-4b',
+        // Verified against the current NVIDIA Build hosted contract:
+        // https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.2-klein-4b
+        path: 'black-forest-labs/flux.2-klein-4b',
         label: 'FLUX.2 [klein] 4B',
         capabilities: Object.freeze(['generate', 'edit']),
     }),
@@ -155,17 +168,29 @@ export function normalizeNvidiaImageRequest(value, { env = process.env } = {}) {
     if (referenceImage.error) return referenceImage;
 
     const model = configuration.model;
+    const kind = referenceImage.value ? 'edit' : 'generate';
+    const dimensions = IMAGE_ASPECT_RATIO_DIMENSIONS[aspectRatio];
+    // Verified hosted contract fields: mode, prompt, width, height, samples,
+    // seed, steps. There is no aspect_ratio field upstream -- the client's
+    // aspect ratio selection is resolved to explicit width/height here.
     const payload = {
+        mode: kind === 'edit' ? 'Image Editing' : 'Image Generation',
         prompt: prompt.value,
-        aspect_ratio: aspectRatio,
+        width: dimensions.width,
+        height: dimensions.height,
+        samples: 1,
         steps: steps.value,
     };
     if (seed.value != null) payload.seed = seed.value;
+    // Editing-mode input image field: the verified contract documents only
+    // the generation payload shape, so this stays a best-effort carryover
+    // pending a live hosted-account contract check (see
+    // nvidiaImageProviderStatus's `tested`/`productionReady: false`).
     if (referenceImage.value) payload.image = referenceImage.value;
 
     return {
         value: {
-            kind: referenceImage.value ? 'edit' : 'generate',
+            kind,
             model,
             payload,
         },

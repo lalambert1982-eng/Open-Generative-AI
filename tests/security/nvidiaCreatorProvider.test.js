@@ -33,7 +33,7 @@ test('model allowlist resolves only reviewed registry entries and ignores unknow
     assert.deepEqual(registry.map((model) => model.id), ['flux-2-klein-4b']);
 
     const known = resolveNvidiaImageModel({ NVIDIA_IMAGE_MODEL: 'flux-2-klein-4b' });
-    assert.equal(known.path, 'black-forest-labs/flux_2-klein-4b');
+    assert.equal(known.path, 'black-forest-labs/flux.2-klein-4b');
 
     const unknown = resolveNvidiaImageModel({ NVIDIA_IMAGE_MODEL: 'attacker-supplied-model' });
     assert.equal(unknown.id, 'flux-2-klein-4b');
@@ -69,10 +69,13 @@ test('image generation requests normalize prompt, aspect ratio, seed, and steps 
     }, { env: configuredEnv });
     assert.equal(result.error, undefined);
     assert.equal(result.value.kind, 'generate');
-    assert.equal(result.value.model.path, 'black-forest-labs/flux_2-klein-4b');
+    assert.equal(result.value.model.path, 'black-forest-labs/flux.2-klein-4b');
     assert.deepEqual(result.value.payload, {
+        mode: 'Image Generation',
         prompt: 'A dramatic track stadium at sunset.',
-        aspect_ratio: '16:9',
+        width: 1344,
+        height: 768,
+        samples: 1,
         steps: 10,
         seed: 42,
     });
@@ -85,8 +88,11 @@ test('image-edit requests normalize with a reference image and are classified as
     }, { env: configuredEnv });
     assert.equal(result.error, undefined);
     assert.equal(result.value.kind, 'edit');
+    assert.equal(result.value.payload.mode, 'Image Editing');
     assert.equal(result.value.payload.image, onePixelPng.toString('base64'));
-    assert.equal(result.value.payload.aspect_ratio, '1:1');
+    assert.equal(result.value.payload.width, 1024);
+    assert.equal(result.value.payload.height, 1024);
+    assert.equal(result.value.payload.samples, 1);
     assert.equal(result.value.payload.steps, 4);
 });
 
@@ -149,7 +155,7 @@ test('the upstream request always targets the fixed NVIDIA GenAI host, never a c
         },
     });
     assert.equal(result.ok, true);
-    assert.equal(captured.url, 'https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux_2-klein-4b');
+    assert.equal(captured.url, 'https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.2-klein-4b');
     assert.equal(captured.options.headers.authorization, `Bearer ${providerKey}`);
 });
 

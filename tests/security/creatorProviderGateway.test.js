@@ -402,7 +402,7 @@ test('NVIDIA image proxy returns image bytes without exposing the API key', asyn
     assert.equal(response.headers.get('content-type'), 'image/png');
     assert.equal(response.headers.get('x-creator-tool-id'), NVIDIA_IMAGE_TOOL_ID);
     assert.equal(response.headers.get('x-generation-kind'), 'generate');
-    assert.equal(captured.url, 'https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux_2-klein-4b');
+    assert.equal(captured.url, 'https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.2-klein-4b');
     assert.equal(captured.options.headers.authorization, `Bearer ${providerKey}`);
     assert.equal(captured.options.headers.cookie, undefined);
     assert.deepEqual(new Uint8Array(await response.arrayBuffer()), png);
