@@ -95,6 +95,15 @@ export function nvidiaImageProviderStatus(env = process.env) {
         productionReady: false,
         model: configuration.model.label,
         capabilities: configuration.model.capabilities,
+        // Generation has been implemented against the verified hosted
+        // contract. Editing (the referenceImage/`image` payload field) is
+        // implemented from documentation only -- it has not been exercised
+        // against a live hosted NVIDIA account, so it is experimental and
+        // requires live verification before it can be called productionReady.
+        capabilityStatus: Object.freeze({
+            generate: 'implemented',
+            edit: 'experimental-requires-live-verification',
+        }),
     };
 }
 

@@ -41,6 +41,13 @@ const DEFAULT_REQUEST_LIMIT = 30;
 const DEFAULT_STATUS_LIMIT = 120;
 const DEFAULT_WINDOW_MS = 60_000;
 const MAX_JSON_BODY_BYTES = 64 * 1024;
+// NVIDIA image-edit requests carry a base64 reference image up to
+// nvidiaCreatorProvider's own MAX_REFERENCE_IMAGE_BYTES (8 MiB raw, ~11.2 MiB
+// base64-encoded). MAX_JSON_BODY_BYTES above is sized for ordinary text
+// payloads and would reject every real edit request before that provider's
+// own size/type validation ever ran, so this route gets its own larger
+// ceiling with headroom for the surrounding JSON and prompt text.
+const MAX_NVIDIA_IMAGE_JSON_BODY_BYTES = 16 * 1024 * 1024;
 const MAX_PROVIDER_JSON_BYTES = 32 * 1024 * 1024;
 const MAX_BINARY_BYTES = 32 * 1024 * 1024;
 
@@ -143,14 +150,14 @@ export function authorizeCreatorRequest(request, {
     return { user: authentication.user };
 }
 
-async function parseCreatorJson(request, { env = process.env } = {}) {
+async function parseCreatorJson(request, { env = process.env, maxBytes = MAX_JSON_BODY_BYTES } = {}) {
     const declaredLength = Number(request.headers.get('content-length') || 0);
-    if (declaredLength > MAX_JSON_BODY_BYTES) {
+    if (declaredLength > maxBytes) {
         return { response: creatorJson({ error: 'Request body is too large.' }, 413) };
     }
 
     const raw = await request.text();
-    if (new TextEncoder().encode(raw).byteLength > MAX_JSON_BODY_BYTES) {
+    if (new TextEncoder().encode(raw).byteLength > maxBytes) {
         return { response: creatorJson({ error: 'Request body is too large.' }, 413) };
     }
 
@@ -334,10 +341,8 @@ function generationProviderStatuses(env) {
             tested: false,
             productionReady: false,
         },
-        {
-            ...nvidiaImageProviderStatus(env),
-            productionReady: false,
-        },
+        // nvidiaImageProviderStatus() already reports productionReady: false.
+        nvidiaImageProviderStatus(env),
     ];
 }
 
@@ -560,7 +565,7 @@ export async function handleNvidiaImage(request, {
 } = {}) {
     const auth = authorizeCreatorRequest(request, { env, action: 'nvidia-image' });
     if (auth.response) return auth.response;
-    const parsed = await parseCreatorJson(request, { env });
+    const parsed = await parseCreatorJson(request, { env, maxBytes: MAX_NVIDIA_IMAGE_JSON_BODY_BYTES });
     if (parsed.response) return parsed.response;
 
     const result = await createNvidiaImageGeneration(parsed.value, { env, fetchImpl });

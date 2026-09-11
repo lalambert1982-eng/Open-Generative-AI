@@ -396,6 +396,81 @@ test('BRAIN_MAX_ATTEMPTS strictly bounds provider attempts', async () => {
     assert.equal(calls, 2);
 });
 
+test('BRAIN_MAX_TOTAL_MS defaults to a bounded overall fallback budget and is exposed on brain status', () => {
+    const configuration = getBrainConfiguration({});
+    assert.equal(configuration.totalBudgetMs, 90_000);
+
+    const explicit = getBrainConfiguration({ BRAIN_MAX_TOTAL_MS: '5000' });
+    assert.equal(explicit.totalBudgetMs, 5000);
+
+    const invalid = getBrainConfiguration({ BRAIN_MAX_TOTAL_MS: '500' });
+    assert.equal(invalid.valid, false);
+    assert.match(invalid.errors[0], /BRAIN_MAX_TOTAL_MS/);
+
+    const status = brainRouterStatus(baseEnv);
+    assert.equal(status.totalBudgetMs, 90_000);
+});
+
+test('an exhausted overall fallback budget stops the chain instead of starting another provider', async () => {
+    const calls = [];
+    await assert.rejects(
+        reasonWithBrain(request, {
+            // Five sequential providers at up to 45s each (~225s worst case)
+            // is technically possible but operationally undesirable; a tiny
+            // BRAIN_MAX_TOTAL_MS (the configured minimum) proves the chain
+            // stops after the first attempt rather than starting a second
+            // one it could not realistically finish inside the budget, even
+            // though BRAIN_MAX_ATTEMPTS would otherwise allow the full
+            // 5-provider chain to run.
+            env: {
+                NVIDIA_API_KEY: 'nvidia-test-provider-secret',
+                GEMINI_API_KEY: 'gemini-test-provider-secret',
+                GROQ_API_KEY: 'groq-test-provider-secret',
+                OPENROUTER_API_KEY: 'openrouter-test-provider-secret',
+                ANTHROPIC_API_KEY: 'anthropic-test-provider-secret',
+                BRAIN_MAX_TOTAL_MS: '1000',
+            },
+            fetchImpl: async (url) => {
+                calls.push(url);
+                return new Response(JSON.stringify({ error: { message: 'temporarily unavailable' } }), { status: 503 });
+            },
+        }),
+        (error) => {
+            assert.equal(error instanceof BrainRouterError, true);
+            assert.deepEqual(error.attemptedProviders, ['nvidia']);
+            return true;
+        },
+    );
+    assert.equal(calls.length, 1);
+});
+
+test('the full fallback chain still completes when the overall budget is not exhausted', async () => {
+    const calls = [];
+    const result = await reasonWithBrain(request, {
+        env: {
+            NVIDIA_API_KEY: 'nvidia-test-provider-secret',
+            GEMINI_API_KEY: 'gemini-test-provider-secret',
+            GROQ_API_KEY: 'groq-test-provider-secret',
+            OPENROUTER_API_KEY: 'openrouter-test-provider-secret',
+            ANTHROPIC_API_KEY: 'anthropic-test-provider-secret',
+        },
+        fetchImpl: async (url) => {
+            calls.push(url);
+            if (calls.length < 5) {
+                return new Response(JSON.stringify({ error: { message: 'temporarily unavailable' } }), { status: 503 });
+            }
+            return new Response(JSON.stringify({
+                model: 'claude-sonnet-5',
+                content: [{ type: 'text', text: 'Anthropic plan reached via full default fallback' }],
+                stop_reason: 'end_turn',
+                usage: { input_tokens: 5, output_tokens: 5 },
+            }), { status: 200 });
+        },
+    });
+    assert.equal(result.provider, 'anthropic');
+    assert.equal(calls.length, 5);
+});
+
 test('safety rejections never fall back', async () => {
     let calls = 0;
     await assert.rejects(

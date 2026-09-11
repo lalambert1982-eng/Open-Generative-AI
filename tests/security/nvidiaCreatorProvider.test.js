@@ -260,3 +260,13 @@ test('provider status exposes configuration, model, and capabilities without eve
     const unconfigured = nvidiaImageProviderStatus({});
     assert.equal(unconfigured.configured, false);
 });
+
+test('provider status reports generation as implemented and editing as experimental, never productionReady', () => {
+    const status = nvidiaImageProviderStatus(configuredEnv);
+    assert.equal(status.productionReady, false);
+    assert.equal(status.tested, false);
+    assert.deepEqual(status.capabilityStatus, {
+        generate: 'implemented',
+        edit: 'experimental-requires-live-verification',
+    });
+});

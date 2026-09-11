@@ -13,6 +13,15 @@ const OPENAI_COMPATIBLE_URLS = Object.freeze({
 });
 
 const DEFAULT_TIMEOUT_MS = 45_000;
+// Overall wall-clock budget for the whole fallback chain. Five providers at
+// up to 45s each is technically possible (~225s) but operationally
+// undesirable inside a bounded serverless function. Once starting another
+// provider could not realistically finish inside the remaining budget, the
+// chain stops instead of beginning an attempt doomed to be cut off by the
+// platform. Configurable via BRAIN_MAX_TOTAL_MS; the default is sized to fit
+// comfortably inside the Creator API route's explicit maxDuration (see
+// app/api/creator/[[...path]]/route.js).
+const DEFAULT_TOTAL_BUDGET_MS = 90_000;
 const MAX_PROVIDER_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_TASK_CHARACTERS = 20_000;
 const MAX_CONTEXT_CHARACTERS = 30_000;
@@ -138,6 +147,15 @@ function strictAttempts(value, defaultValue) {
     return { value: parsed };
 }
 
+function strictTotalBudget(value, defaultValue) {
+    if (value == null || value === '') return { value: defaultValue };
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 1_000 || parsed > 600_000) {
+        return { error: 'BRAIN_MAX_TOTAL_MS must be a number of milliseconds from 1000 to 600000.' };
+    }
+    return { value: Math.round(parsed) };
+}
+
 function modelFor(provider, env) {
     const definition = PROVIDER_DEFINITIONS[provider];
     const legacy = definition.legacyModelVariable ? env[definition.legacyModelVariable] : null;
@@ -191,11 +209,15 @@ export function getBrainConfiguration(env = process.env) {
     const attempts = strictAttempts(env.BRAIN_MAX_ATTEMPTS, fallbackOrder.length || 1);
     if (attempts.error) errors.push(attempts.error);
 
+    const totalBudget = strictTotalBudget(env.BRAIN_MAX_TOTAL_MS, DEFAULT_TOTAL_BUDGET_MS);
+    if (totalBudget.error) errors.push(totalBudget.error);
+
     return Object.freeze({
         selectedProvider,
         fallbackOrder: Object.freeze(fallbackOrder),
         automaticFallback: fallback.value ?? false,
         maxAttempts: attempts.value ?? 1,
+        totalBudgetMs: totalBudget.value ?? DEFAULT_TOTAL_BUDGET_MS,
         valid: errors.length === 0,
         errors: Object.freeze(errors),
     });
@@ -248,6 +270,7 @@ export function brainRouterStatus(env = process.env) {
         fallbackEnabled: configuration.automaticFallback,
         fallbackOrder: configuration.fallbackOrder,
         maxAttempts: configuration.maxAttempts,
+        totalBudgetMs: configuration.totalBudgetMs,
         configurationValid: configuration.valid,
         ...(configuration.valid ? {} : { configurationErrors: configuration.errors }),
     };
@@ -848,10 +871,15 @@ export async function reasonWithBrain(request, {
     // an explicit providerOverride (an explicit request for one provider is
     // never silently rerouted), or once every eligible provider is exhausted.
     const canSkipMissingKey = configuration.automaticFallback && normalized.fallbackAllowed && !providerOverride;
+    // Bounds the chain's total wall-clock time in addition to maxAttempts
+    // (see DEFAULT_TOTAL_BUDGET_MS above): a provider is never started once
+    // there isn't enough of the budget left for it to realistically finish.
+    const deadline = Date.now() + configuration.totalBudgetMs;
     const attemptedProviders = [];
     let lastError = null;
     for (const provider of order) {
         if (attemptedProviders.length >= configuration.maxAttempts) break;
+        if (attemptedProviders.length > 0 && (deadline - Date.now()) < DEFAULT_TIMEOUT_MS) break;
         const key = providerKey(provider, env);
         if (!key) {
             if (!canSkipMissingKey) {

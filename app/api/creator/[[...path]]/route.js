@@ -14,6 +14,13 @@ import { handleCreatorProjectRoute } from '../../../../src/lib/creatorProjectRou
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// Explicit execution budget rather than relying on the platform default.
+// Comfortably covers the slowest single upstream call already made on this
+// route (ElevenLabs speech, up to 120s) and NVIDIA Image Generation (up to
+// ~60s), with margin for the Selena Brain Router's own bounded overall
+// fallback budget (BRAIN_MAX_TOTAL_MS, see src/lib/brainRouter.js) plus
+// request/response overhead.
+export const maxDuration = 150;
 
 async function dispatch(request, context, method) {
     const { path = [] } = await context.params;
