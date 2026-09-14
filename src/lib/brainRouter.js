@@ -22,6 +22,18 @@ const DEFAULT_TIMEOUT_MS = 45_000;
 // comfortably inside the Creator API route's explicit maxDuration (see
 // app/api/creator/[[...path]]/route.js).
 const DEFAULT_TOTAL_BUDGET_MS = 90_000;
+// Minimum remaining budget required to start another attempt after the first.
+// This is intentionally much smaller than DEFAULT_TIMEOUT_MS: that constant
+// is a worst-case ceiling per attempt, not an expected duration, and a
+// healthy provider typically responds in a few seconds. Requiring a full
+// fresh DEFAULT_TIMEOUT_MS window before ever starting a second attempt
+// would mean a total budget of ~2x DEFAULT_TIMEOUT_MS (e.g. the 90s default
+// here) could never actually complete a fallback once the first provider
+// used its full timeout allowance -- there would structurally never be a
+// full window left. Each attempt's own timeout is still capped to whatever
+// time actually remains (see reasonWithBrain), so this floor only guards
+// against starting an attempt with too little time left to be worth trying.
+const MIN_ATTEMPT_BUDGET_MS = 5_000;
 const MAX_PROVIDER_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_TASK_CHARACTERS = 20_000;
 const MAX_CONTEXT_CHARACTERS = 30_000;
@@ -543,13 +555,13 @@ async function readJsonResponse(response, provider) {
     return value;
 }
 
-async function providerFetch(provider, fetchImpl, url, options) {
+async function providerFetch(provider, fetchImpl, url, options, timeoutMs = DEFAULT_TIMEOUT_MS) {
     let response;
     try {
         response = await fetchImpl(url, {
             ...options,
             redirect: 'error',
-            signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+            signal: AbortSignal.timeout(timeoutMs),
         });
     } catch (error) {
         const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';
@@ -575,7 +587,7 @@ function resultOrMalformed(provider, result) {
     );
 }
 
-async function callGemini(request, { env, fetchImpl, model, key }) {
+async function callGemini(request, { env, fetchImpl, model, key, timeoutMs }) {
     const prompts = brainPrompts(request, env);
     const generationConfig = { maxOutputTokens: 4096 };
     if (request.desiredOutput.type === 'json') {
@@ -599,6 +611,7 @@ async function callGemini(request, { env, fetchImpl, model, key }) {
             headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
             body: JSON.stringify(body),
         },
+        timeoutMs,
     );
     const candidate = value?.candidates?.[0];
     if (isSafetyReason(value?.promptFeedback?.blockReason) || isSafetyReason(candidate?.finishReason)) {
@@ -667,7 +680,7 @@ function openAiResponseFormat(request) {
     };
 }
 
-async function callOpenAiCompatible(provider, request, { env, fetchImpl, model, key }) {
+async function callOpenAiCompatible(provider, request, { env, fetchImpl, model, key, timeoutMs }) {
     const prompts = brainPrompts(request, env);
     const url = OPENAI_COMPATIBLE_URLS[provider];
     const body = {
@@ -693,7 +706,7 @@ async function callOpenAiCompatible(provider, request, { env, fetchImpl, model, 
         method: 'POST',
         headers,
         body: JSON.stringify(body),
-    });
+    }, timeoutMs);
     const choice = value?.choices?.[0];
     if (choice?.message?.refusal || isSafetyReason(choice?.finish_reason)) {
         throw new BrainRouterError('safety_rejection', `${PROVIDER_DEFINITIONS[provider].label} rejected the request for safety reasons.`, 422, {
@@ -719,7 +732,7 @@ async function callOpenAiCompatible(provider, request, { env, fetchImpl, model, 
     });
 }
 
-async function callAnthropic(request, { env, fetchImpl, model, key }) {
+async function callAnthropic(request, { env, fetchImpl, model, key, timeoutMs }) {
     const prompts = brainPrompts(request, {
         ...env,
         BRAIN_SYSTEM_PROMPT: env.BRAIN_SYSTEM_PROMPT || env.ANTHROPIC_ASSISTANT_SYSTEM_PROMPT,
@@ -741,7 +754,7 @@ async function callAnthropic(request, { env, fetchImpl, model, key }) {
             'anthropic-version': env.ANTHROPIC_API_VERSION || '2023-06-01',
         },
         body: JSON.stringify(body),
-    });
+    }, timeoutMs);
     if (isSafetyReason(value?.stop_reason)) {
         throw new BrainRouterError('safety_rejection', 'Anthropic rejected the request for safety reasons.', 422, {
             provider: 'anthropic',
@@ -879,7 +892,8 @@ export async function reasonWithBrain(request, {
     let lastError = null;
     for (const provider of order) {
         if (attemptedProviders.length >= configuration.maxAttempts) break;
-        if (attemptedProviders.length > 0 && (deadline - Date.now()) < DEFAULT_TIMEOUT_MS) break;
+        const remainingMs = deadline - Date.now();
+        if (attemptedProviders.length > 0 && remainingMs < MIN_ATTEMPT_BUDGET_MS) break;
         const key = providerKey(provider, env);
         if (!key) {
             if (!canSkipMissingKey) {
@@ -899,6 +913,7 @@ export async function reasonWithBrain(request, {
                 fetchImpl,
                 model: modelFor(provider, env),
                 key,
+                timeoutMs: Math.max(MIN_ATTEMPT_BUDGET_MS, Math.min(DEFAULT_TIMEOUT_MS, remainingMs)),
             });
         } catch (error) {
             const normalizedError = error instanceof BrainRouterError
