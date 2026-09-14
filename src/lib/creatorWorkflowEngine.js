@@ -405,10 +405,17 @@ async function step(user, projectId, runId, transition, options = {}) {
             // write, rather than as a separate client-triggered save — a
             // completed scene node can never register its asset while failing
             // (or racing) to write the scene URL back.
-            const { sceneId, url, isVideo } = result.storyboardSceneUpdate;
+            const { sceneId, url, isVideo, expectedPrompt } = result.storyboardSceneUpdate;
             const scenes = Array.isArray(proj.storyboard?.scenes) ? proj.storyboard.scenes : [];
             const sceneIndex = scenes.findIndex((scene) => scene.id === sceneId);
-            if (sceneIndex !== -1) {
+            // If the scene has since been edited (its prompt no longer matches
+            // what this node was generating for), the write-back is stale —
+            // applying it would silently replace a newer edit with output
+            // from the older prompt. Skip only the scene handoff; the asset
+            // is still registered in Project Assets either way.
+            const sceneStillMatches = sceneIndex !== -1
+                && (expectedPrompt == null || scenes[sceneIndex].prompt === expectedPrompt);
+            if (sceneStillMatches) {
                 const updatedScene = {
                     ...scenes[sceneIndex],
                     imageUrl: isVideo ? scenes[sceneIndex].imageUrl : url,
@@ -418,8 +425,6 @@ async function step(user, projectId, runId, transition, options = {}) {
                 };
                 patch.storyboard = { ...proj.storyboard, scenes: replaceAt(scenes, sceneIndex, updatedScene) };
             }
-            // A scene the user has since deleted is not an error: the asset is
-            // still registered in Project Assets either way.
         }
         if (result.asset || result.storyboardSceneUpdate) {
             patch.timeline = storyboardToTimeline(patch.storyboard || proj.storyboard, patch.assets || proj.assets);
@@ -626,6 +631,11 @@ function completeNode({ run, nodeIndex, node, job, project, idGenerator, now, en
             sceneId: node.inputs.sceneId,
             url: asset.url,
             isVideo: node.kind !== 'image.generate',
+            // Snapshot of what this node was actually generating for, so the
+            // write-back below can detect a scene the user has since edited
+            // (a different prompt) and skip overwriting it with output from
+            // the now-stale one.
+            expectedPrompt: node.kind === 'avatar.generate' ? (node.inputs.script ?? null) : (node.inputs.prompt ?? null),
         };
     }
     return result;
