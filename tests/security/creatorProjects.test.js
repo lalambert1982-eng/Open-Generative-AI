@@ -267,8 +267,10 @@ test('mutateCreatorProject refuses to overwrite a Project changed by another req
     });
 
     let releaseSlowMutator;
+    let slowResult;
+    let slowMutationSettled;
     const slowMutatorEntered = new Promise((resolve) => {
-        mutateCreatorProject(owner, projectId, async (project) => {
+        slowMutationSettled = mutateCreatorProject(owner, projectId, async (project) => {
             resolve();
             // Simulate a long-running provider call in progress while another
             // request commits a completely unrelated change underneath us.
@@ -279,7 +281,6 @@ test('mutateCreatorProject refuses to overwrite a Project changed by another req
             (error) => { slowResult = { ok: false, error }; },
         );
     });
-    let slowResult;
 
     await slowMutatorEntered;
     const renamed = await renameCreatorProject(owner, projectId, { name: 'Renamed mid-flight' }, {
@@ -288,7 +289,10 @@ test('mutateCreatorProject refuses to overwrite a Project changed by another req
     assert.equal(renamed.name, 'Renamed mid-flight');
 
     releaseSlowMutator();
-    await new Promise((resolve) => setImmediate(resolve));
+    // Await the mutator's own settled promise (not a fixed-tick race) so the
+    // assertion below only runs once its rejection has actually propagated
+    // through mutateCreatorProject's queue + revision-recheck chain.
+    await slowMutationSettled;
     assert.equal(slowResult.ok, false);
     assert.ok(slowResult.error instanceof CreatorProjectError);
     assert.equal(slowResult.error.code, 'project_conflict');
