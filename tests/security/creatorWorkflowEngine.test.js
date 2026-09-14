@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+    CreatorProjectError,
     createCreatorProject,
     creatorProjectStoreForTests,
     getCreatorProject,
@@ -446,6 +447,59 @@ test('a Project write failure right after a successful provider submission never
     assert.equal(fetchCalls, 2, 'the retry performs exactly one new provider call');
 });
 
+test('a concurrent advance() call within the announce grace period does not falsely fail an in-flight submission', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    const idGenerator = sequentialIdGenerator('node');
+
+    const { run } = await createWorkflowRun(owner, projectAId, {
+        source: 'manual',
+        nodes: [{ kind: 'image.generate', prompt: 'a single step' }],
+    }, { env, blobStore, idGenerator, now: Date.UTC(2026, 0, 2) });
+
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl: succeedingFetch(), now: Date.UTC(2026, 0, 3) });
+    await approveWorkflowNode(owner, projectAId, run.id, { env, blobStore, now: Date.UTC(2026, 0, 4) });
+
+    // Force the node into the "announced running, no jobId yet" state (using
+    // the same faulty-write technique as the test above) — this is exactly
+    // the state a second, concurrent advance() call would observe if it
+    // landed in the real gap between phase 1 finishing and phase 2 starting.
+    let fetchCalls = 0;
+    const countingFetch = async (...args) => { fetchCalls += 1; return succeedingFetch()(...args); };
+    let puts = 0;
+    const faultyBlobStore = {
+        ...blobStore,
+        async put(...args) {
+            puts += 1;
+            if (puts === 2) throw new Error('simulated_blob_write_failure');
+            return blobStore.put(...args);
+        },
+    };
+    const announceTime = Date.UTC(2026, 0, 5);
+    await assert.rejects(
+        advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore: faultyBlobStore, fetchImpl: countingFetch, now: announceTime }),
+    );
+    assert.equal(fetchCalls, 1);
+
+    // A second advance() call landing just 1 second later — well within the
+    // announce grace period — must be a no-op, not a false failure.
+    const withinGrace = await advanceWorkflowRun(owner, projectAId, run.id, {
+        env, blobStore, fetchImpl: countingFetch, now: announceTime + 1000,
+    });
+    assert.equal(withinGrace.changed, false, 'a concurrent call within the grace period must not act on the announced-but-unconfirmed node');
+    const stillRunning = await getCreatorProject(owner, projectAId, { env, blobStore });
+    assert.equal(stillRunning.workflowRuns[0].nodes[0].status, 'running', 'the node must not have been falsely failed');
+    assert.equal(fetchCalls, 1, 'the no-op check must never call the provider');
+
+    // Once the grace period genuinely elapses, the node still self-heals into
+    // a visible failure rather than staying stuck forever.
+    const afterGrace = await advanceWorkflowRun(owner, projectAId, run.id, {
+        env, blobStore, fetchImpl: countingFetch, now: announceTime + 6000,
+    });
+    assert.equal(afterGrace.run.nodes[0].status, 'failed');
+    assert.equal(fetchCalls, 1, 'even the eventual failure must never have triggered a second paid submission');
+});
+
 function submitThenFlakyPoll({ failuresBeforeSuccess = Infinity, failureStatus = 502 } = {}) {
     let pollCalls = 0;
     let submitCalls = 0;
@@ -812,4 +866,70 @@ test('retrying a failed run is blocked by the same active-run cap creating a new
     await cancelWorkflowRun(owner, projectAId, activeRuns[0].id, { env, blobStore, now: Date.UTC(2026, 0, 7) });
     const retried = await retryWorkflowNode(owner, projectAId, failedRun.id, { env, blobStore, now: Date.UTC(2026, 0, 8) });
     assert.equal(retried.run.status, 'running');
+});
+
+test('a Storyboard autosave whose read straddles a workflow node completion is rejected, never silently erasing the completed node', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    await saveCreatorStoryboard(owner, projectAId, {
+        storyboard: {
+            scenes: [{ id: 'scene-1', title: 'Opening', prompt: 'wide shot of the harbor at sunrise', aspectRatio: '16:9' }],
+        },
+    }, { env, blobStore, now: Date.UTC(2026, 0, 2) });
+
+    const idGenerator = sequentialIdGenerator('node');
+    const { run } = await createWorkflowRun(owner, projectAId, { source: 'storyboard' }, {
+        env, blobStore, idGenerator, now: Date.UTC(2026, 0, 3),
+    });
+    const fetchImpl = succeedingFetch();
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl, now: Date.UTC(2026, 0, 4) });
+    await approveWorkflowNode(owner, projectAId, run.id, { env, blobStore, now: Date.UTC(2026, 0, 5) });
+
+    // Simulate a Storyboard autosave whose own initial read of the Project
+    // completes BEFORE the workflow node's completion write lands, but whose
+    // write (built from that now-stale storyboard) doesn't happen until
+    // after — exactly the interleaving the review described, not just a
+    // browser tab replaying old in-memory state.
+    let releaseAutosaveRead;
+    let autosaveSettled;
+    let paused = false;
+    const autosaveReadStarted = new Promise((resolve) => {
+        const pausingBlobStore = {
+            ...blobStore,
+            async get(...args) {
+                const result = await blobStore.get(...args);
+                if (!paused) {
+                    paused = true;
+                    resolve();
+                    await new Promise((release) => { releaseAutosaveRead = release; });
+                }
+                return result;
+            },
+        };
+        autosaveSettled = saveCreatorStoryboard(owner, projectAId, {
+            storyboard: {
+                scenes: [{ id: 'scene-1', title: 'Opening (edited by autosave)', prompt: 'wide shot of the harbor at sunrise', aspectRatio: '16:9' }],
+            },
+        }, { env, blobStore: pausingBlobStore, now: Date.UTC(2026, 0, 6) }).then(
+            (value) => ({ ok: true, value }),
+            (error) => ({ ok: false, error }),
+        );
+    });
+    await autosaveReadStarted;
+
+    const finished = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl, now: Date.UTC(2026, 0, 7) });
+    assert.equal(finished.run.nodes[0].status, 'completed');
+    const scene = finished.project.storyboard.scenes.find((item) => item.id === 'scene-1');
+    assert.ok(scene.imageUrl, 'the workflow must have written the generated image back to the scene');
+
+    releaseAutosaveRead();
+    const autosaveResult = await autosaveSettled;
+    assert.equal(autosaveResult.ok, false, 'the autosave must not have been allowed to silently overwrite the workflow completion');
+    assert.ok(autosaveResult.error instanceof CreatorProjectError);
+    assert.equal(autosaveResult.error.code, 'project_conflict');
+
+    // The workflow's completed node output must have survived untouched.
+    const reloaded = await getCreatorProject(owner, projectAId, { env, blobStore });
+    const reloadedScene = reloaded.storyboard.scenes.find((item) => item.id === 'scene-1');
+    assert.equal(reloadedScene.imageUrl, scene.imageUrl);
 });

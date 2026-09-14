@@ -67,6 +67,18 @@ const MAX_WORKFLOW_NODES = 20;
 // failing does not mean the underlying job failed, so this must stay well
 // short of "immediately fail" to avoid ever orphaning a still-running job.
 const MAX_TRANSIENT_POLL_FAILURES = 5;
+// advanceWorkflowRun's submission is two separate mutateCreatorProject calls:
+// phase 1 announces "running" with no jobId yet, then releases the
+// per-project mutation queue before phase 2 makes the actual provider call.
+// A concurrent second advance() call (a double-click, two open tabs, or
+// Selena's workflow.run racing the UI's own advance) can land in that gap
+// and observe the exact same "running, no jobId" state phase 1 of the FIRST
+// call just wrote. Failing it immediately there would let the second call
+// race ahead of the first call's own phase 2 and falsely fail a node that
+// was never actually interrupted. This grace period is long enough to cover
+// that normal phase-1-to-phase-2 gap, short enough that a genuinely
+// abandoned submission (a crash between phases) still self-heals quickly.
+const SUBMISSION_ANNOUNCE_GRACE_MS = 5000;
 
 export class CreatorWorkflowError extends CreatorProjectError {
     constructor(code, message, status = 400) {
@@ -471,8 +483,15 @@ export async function advanceWorkflowRun(user, projectId, runId, options = {}) {
         if (node.status === 'running') {
             // Either genuinely awaiting the provider (has a jobId — poll it),
             // or a prior submission was announced but never finalized (no
-            // jobId — this fails cleanly rather than re-submitting).
+            // jobId — this fails cleanly rather than re-submitting), UNLESS
+            // that announcement is still fresh enough to be this call's own
+            // in-flight phase 2 (see SUBMISSION_ANNOUNCE_GRACE_MS above).
             if (!node.jobId) {
+                const announcedAt = Date.parse(node.startedAt || node.createdAt);
+                const elapsed = Number.isFinite(announcedAt) ? now - announcedAt : Infinity;
+                if (elapsed < SUBMISSION_ANNOUNCE_GRACE_MS) {
+                    return null;
+                }
                 const updatedNode = { ...node, status: 'failed', error: 'The generation request was interrupted before it could be confirmed. Retry this step.', completedAt: iso(now) };
                 return {
                     reason: 'node_failed',
