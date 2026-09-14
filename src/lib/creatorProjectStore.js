@@ -9,7 +9,7 @@ const PROJECT_ROOT = 'creator-projects';
 const ASSET_ROOT = 'creator-assets';
 const PROJECT_VERSION = 1;
 const MAX_PROJECTS = 100;
-const MAX_ASSETS = 500;
+export const MAX_ASSETS = 500;
 const MAX_SCENES = 100;
 const MAX_MESSAGES = 50;
 const MAX_PROJECT_BYTES = 1024 * 1024;
@@ -398,6 +398,31 @@ function assertExpectedRevision(project, expectedRevision) {
     }
 }
 
+async function readAndCheckRevision(owner, id, expectedRevision, { configuration, blobStore }) {
+    const project = await readProject(owner, id, { configuration, blobStore });
+    if (expectedRevision != null) assertExpectedRevision(project, expectedRevision);
+    return project;
+}
+
+// Shared by every Project mutation (workflow's mutateCreatorProject and the
+// simpler rename/asset/storyboard/conversation writes below): compute the
+// patch against `project`, then re-read immediately before writing and
+// refuse to overwrite a Project another request already changed, rather
+// than silently discarding it. This is what actually protects against a
+// cross-function race (e.g. a Storyboard autosave racing a workflow node's
+// completion) — it doesn't depend on both writers sharing the same queue,
+// only on both going through this same check-before-write.
+async function commitProjectPatch(owner, id, project, patch, { configuration, blobStore, now }) {
+    if (patch == null) return projectForClient(project);
+    const current = await readProject(owner, id, { configuration, blobStore });
+    if (current.revision !== project.revision) {
+        throw new CreatorProjectError('project_conflict', 'Project changed in another request. Reload it and try again.', 409);
+    }
+    const next = updatedProject(project, patch, now);
+    await writeProject(next, { configuration, blobStore, allowOverwrite: true });
+    return projectForClient(next);
+}
+
 function storeContext(user, env) {
     const configuration = requireConfiguration(env);
     return { configuration, owner: ownerSubject(user, configuration) };
@@ -425,6 +450,7 @@ export async function createCreatorProject(user, input = {}, {
         storyboard: emptyStoryboard(),
         timeline: storyboardToTimeline(emptyStoryboard(), []),
         workflowReferences: [],
+        workflowRuns: [],
         publishDrafts: [],
     };
     try {
@@ -479,13 +505,9 @@ export async function renameCreatorProject(user, projectId, input = {}, {
 } = {}) {
     const { configuration, owner } = storeContext(user, env);
     const id = validProjectId(projectId);
-    const project = await readProject(owner, id, { configuration, blobStore });
-    assertExpectedRevision(project, input.expectedRevision);
-    const next = updatedProject(project, {
-        name: boundedText(input.name, 'Project name', 100),
-    }, now);
-    await writeProject(next, { configuration, blobStore, allowOverwrite: true });
-    return projectForClient(next);
+    const project = await readAndCheckRevision(owner, id, input.expectedRevision, { configuration, blobStore });
+    const patch = { name: boundedText(input.name, 'Project name', 100) };
+    return commitProjectPatch(owner, id, project, patch, { configuration, blobStore, now });
 }
 
 export async function addCreatorAsset(user, projectId, input = {}, {
@@ -496,19 +518,15 @@ export async function addCreatorAsset(user, projectId, input = {}, {
 } = {}) {
     const { configuration, owner } = storeContext(user, env);
     const id = validProjectId(projectId);
-    const project = await readProject(owner, id, { configuration, blobStore });
-    assertExpectedRevision(project, input.expectedRevision);
+    const project = await readAndCheckRevision(owner, id, input.expectedRevision, { configuration, blobStore });
     const existing = project.assets.find((asset) => asset.url === input.url);
     if (existing) return { project: projectForClient(project), asset: existing, created: false };
     if (project.assets.length >= MAX_ASSETS) throw new CreatorProjectError('asset_limit', `A Project supports at most ${MAX_ASSETS} Assets.`, 409);
     const asset = normalizeAssetInput(input, { env, projectId: id, now, idGenerator });
     const assets = [asset, ...project.assets];
-    const next = updatedProject(project, {
-        assets,
-        timeline: storyboardToTimeline(project.storyboard, assets),
-    }, now);
-    await writeProject(next, { configuration, blobStore, allowOverwrite: true });
-    return { project: projectForClient(next), asset, created: true };
+    const patch = { assets, timeline: storyboardToTimeline(project.storyboard, assets) };
+    const next = await commitProjectPatch(owner, id, project, patch, { configuration, blobStore, now });
+    return { project: next, asset, created: true };
 }
 
 export async function deleteCreatorAsset(user, projectId, assetId, input = {}, {
@@ -521,23 +539,19 @@ export async function deleteCreatorAsset(user, projectId, assetId, input = {}, {
     const { configuration, owner } = storeContext(user, env);
     const id = validProjectId(projectId);
     const targetAssetId = validAssetId(assetId);
-    const project = await readProject(owner, id, { configuration, blobStore });
-    assertExpectedRevision(project, input.expectedRevision);
+    const project = await readAndCheckRevision(owner, id, input.expectedRevision, { configuration, blobStore });
     const asset = project.assets.find((item) => item.id === targetAssetId);
     if (!asset) throw new CreatorProjectError('asset_not_found', 'Asset was not found.', 404);
     const assets = project.assets.filter((item) => item.id !== targetAssetId);
-    const next = updatedProject(project, {
-        assets,
-        timeline: storyboardToTimeline(project.storyboard, assets),
-    }, now);
-    await writeProject(next, { configuration, blobStore, allowOverwrite: true });
+    const patch = { assets, timeline: storyboardToTimeline(project.storyboard, assets) };
+    const next = await commitProjectPatch(owner, id, project, patch, { configuration, blobStore, now });
     if (asset.storagePath && asset.storagePath.startsWith(creatorAssetUploadPrefix(id))) {
         const assetConfiguration = creatorAssetStorageConfiguration(env);
         if (assetConfiguration.configured) {
             await assetBlobStore.del(asset.storagePath, { token: assetConfiguration.blobToken }).catch(() => {});
         }
     }
-    return { project: projectForClient(next), deletedAssetId: targetAssetId };
+    return { project: next, deletedAssetId: targetAssetId };
 }
 
 export async function saveCreatorStoryboard(user, projectId, input = {}, {
@@ -547,15 +561,10 @@ export async function saveCreatorStoryboard(user, projectId, input = {}, {
 } = {}) {
     const { configuration, owner } = storeContext(user, env);
     const id = validProjectId(projectId);
-    const project = await readProject(owner, id, { configuration, blobStore });
-    assertExpectedRevision(project, input.expectedRevision);
+    const project = await readAndCheckRevision(owner, id, input.expectedRevision, { configuration, blobStore });
     const storyboard = normalizeStoryboard(input.storyboard || input, env);
-    const next = updatedProject(project, {
-        storyboard,
-        timeline: storyboardToTimeline(storyboard, project.assets),
-    }, now);
-    await writeProject(next, { configuration, blobStore, allowOverwrite: true });
-    return projectForClient(next);
+    const patch = { storyboard, timeline: storyboardToTimeline(storyboard, project.assets) };
+    return commitProjectPatch(owner, id, project, patch, { configuration, blobStore, now });
 }
 
 export async function saveCreatorConversation(user, projectId, input = {}, {
@@ -565,12 +574,51 @@ export async function saveCreatorConversation(user, projectId, input = {}, {
 } = {}) {
     const { configuration, owner } = storeContext(user, env);
     const id = validProjectId(projectId);
-    const project = await readProject(owner, id, { configuration, blobStore });
-    assertExpectedRevision(project, input.expectedRevision);
-    const conversation = normalizeConversation(input.conversation || input);
-    const next = updatedProject(project, { conversation }, now);
-    await writeProject(next, { configuration, blobStore, allowOverwrite: true });
-    return projectForClient(next);
+    const project = await readAndCheckRevision(owner, id, input.expectedRevision, { configuration, blobStore });
+    const patch = { conversation: normalizeConversation(input.conversation || input) };
+    return commitProjectPatch(owner, id, project, patch, { configuration, blobStore, now });
+}
+
+// Serializes mutateCreatorProject calls per Project within this process — the
+// same technique StandaloneShell already uses client-side for its own request
+// queue. A revision recheck alone still leaves a check-then-write gap: two
+// truly concurrent calls can both pass the recheck before either has written.
+// Serializing here closes that gap for every request this process itself
+// handles; the recheck below remains as the second layer that catches a
+// change made by a *different* process (relevant to a multi-instance
+// deployment, where this in-process queue alone cannot see across instances).
+const projectMutationQueues = new Map();
+
+function enqueueProjectMutation(key, operation) {
+    const previous = projectMutationQueues.get(key) || Promise.resolve();
+    const next = previous.catch(() => {}).then(operation);
+    const settled = next.catch(() => {});
+    projectMutationQueues.set(key, settled);
+    settled.finally(() => {
+        if (projectMutationQueues.get(key) === settled) projectMutationQueues.delete(key);
+    });
+    return next;
+}
+
+export async function mutateCreatorProject(user, projectId, mutator, {
+    env = process.env,
+    blobStore = defaultBlobStore,
+    now = Date.now(),
+    expectedRevision,
+} = {}) {
+    const { configuration, owner } = storeContext(user, env);
+    const id = validProjectId(projectId);
+    return enqueueProjectMutation(`${owner}:${id}`, async () => {
+        // Belt-and-suspenders: even under this process's own serialization, a
+        // different process (or, since commitProjectPatch is now shared with
+        // the unqueued rename/asset/storyboard/conversation writes below, a
+        // concurrent call to one of those) could have written in between.
+        // commitProjectPatch's re-read-before-write is what actually catches
+        // that, regardless of which queue either writer used.
+        const project = await readAndCheckRevision(owner, id, expectedRevision, { configuration, blobStore });
+        const patch = await mutator(project);
+        return commitProjectPatch(owner, id, project, patch, { configuration, blobStore, now });
+    });
 }
 
 export function creatorProjectStoreForTests(records = new Map(), { now = Date.now() } = {}) {

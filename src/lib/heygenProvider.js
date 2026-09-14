@@ -177,11 +177,14 @@ async function readProviderJson(response) {
 function providerFailure(response, value, secrets) {
     const detail = providerMessage(value, secrets);
     if (response.status === 401 || response.status === 403) {
+        // Credential rejection cannot resolve itself by repeating the same
+        // request — the configured key isn't going to change between polls.
         return {
             ok: false,
             kind: 'provider',
             status: 502,
             error: 'HeyGen rejected the configured API credentials.',
+            retryable: false,
         };
     }
     if (response.status === 429) {
@@ -190,6 +193,12 @@ function providerFailure(response, value, secrets) {
             kind: 'provider',
             status: 429,
             error: 'HeyGen rate limit or account balance limit was reached.',
+            // HeyGen collapses "rate limited" and "account balance
+            // exhausted" into the same 429. A genuinely exhausted balance
+            // will never resolve by repeating the identical request, so
+            // treat 429 as non-retryable rather than risk masking that as
+            // "still working" for several more polling attempts.
+            retryable: false,
             ...(detail ? { detail } : {}),
         };
     }
@@ -199,6 +208,7 @@ function providerFailure(response, value, secrets) {
             kind: 'provider',
             status: 422,
             error: 'HeyGen rejected the generation request.',
+            retryable: false,
             ...(detail ? { detail } : {}),
         };
     }
@@ -207,6 +217,7 @@ function providerFailure(response, value, secrets) {
         kind: 'provider',
         status: 502,
         error: 'HeyGen is temporarily unavailable.',
+        retryable: true,
         ...(detail ? { detail } : {}),
     };
 }
@@ -219,6 +230,9 @@ function networkFailure(result) {
         error: result.networkError === 'timeout'
             ? 'HeyGen request timed out.'
             : 'HeyGen is temporarily unavailable.',
+        // A genuine network-level failure (timeout, connection reset) is the
+        // textbook transient case: the same request may simply succeed later.
+        retryable: true,
     };
 }
 
@@ -376,6 +390,7 @@ export async function createHeyGenAvatarVideoJob(value, {
             status: 503,
             error: 'HeyGen is not configured.',
             missing: configuration.missing,
+            retryable: false,
         };
     }
     const normalized = normalizeHeyGenScriptInput(value, { env });
@@ -385,6 +400,7 @@ export async function createHeyGenAvatarVideoJob(value, {
             kind: 'validation',
             status: 400,
             error: normalized.error,
+            retryable: false,
         };
     }
 
@@ -406,6 +422,7 @@ export async function createHeyGenAvatarVideoJob(value, {
             kind: 'provider',
             status: 502,
             error: 'HeyGen returned an invalid response.',
+            retryable: true,
         };
     }
     const secrets = [configuration.apiKey, normalized.value.avatarId, normalized.value.source.voiceId];
@@ -418,6 +435,7 @@ export async function createHeyGenAvatarVideoJob(value, {
             kind: 'provider',
             status: 502,
             error: 'HeyGen returned no valid video ID.',
+            retryable: true,
         };
     }
     return {
@@ -442,6 +460,7 @@ export async function getHeyGenAvatarVideoJob(jobId, {
             status: 503,
             error: 'HeyGen is not configured.',
             missing: configuration.missing,
+            retryable: false,
         };
     }
     if (typeof jobId !== 'string' || !OPAQUE_ID_PATTERN.test(jobId)) {
@@ -450,6 +469,7 @@ export async function getHeyGenAvatarVideoJob(jobId, {
             kind: 'validation',
             status: 400,
             error: 'A valid HeyGen video ID is required.',
+            retryable: false,
         };
     }
 
@@ -468,6 +488,7 @@ export async function getHeyGenAvatarVideoJob(jobId, {
             kind: 'provider',
             status: 502,
             error: 'HeyGen returned an invalid response.',
+            retryable: true,
         };
     }
     const secrets = [configuration.apiKey, configuration.avatarId, configuration.voiceId];

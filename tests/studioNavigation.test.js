@@ -13,6 +13,7 @@ test('Creator Studio routes resolve the integrated hierarchy and legacy aliases'
     assert.equal(resolveStudioDestination(['tools', 'image']), 'image');
     assert.equal(resolveStudioDestination(['apps', 'scene-builder']), 'scene-builder');
     assert.equal(resolveStudioDestination(['apps', 'music-video']), 'music-video');
+    assert.equal(resolveStudioDestination(['apps', 'workflow-run']), 'workflow-run');
     assert.equal(resolveStudioDestination(['projects']), 'projects');
     assert.equal(resolveStudioDestination(['advanced', 'agents', 'create']), 'agent-blueprints');
     assert.equal(resolveStudioDestination(['creator']), 'selena');
@@ -29,7 +30,7 @@ test('Agent Blueprint paths stay inside the Studio shell', () => {
 test('navigation contains one stable destination per required working area', () => {
     const ids = STUDIO_NAVIGATION.map((item) => item.id);
     assert.equal(new Set(ids).size, ids.length);
-    for (const id of ['home', 'selena', 'image', 'video', 'audio', 'graphic-studio', 'scene-builder', 'music-video', 'workflows', 'projects', 'assets', 'publish', 'agent-blueprints', 'marketplace']) {
+    for (const id of ['home', 'selena', 'image', 'video', 'audio', 'graphic-studio', 'scene-builder', 'music-video', 'workflows', 'workflow-run', 'projects', 'assets', 'publish', 'agent-blueprints', 'marketplace']) {
         assert.ok(ids.includes(id), `missing ${id}`);
     }
 });
