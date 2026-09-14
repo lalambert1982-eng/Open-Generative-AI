@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-    ANTHROPIC_ASSISTANT_TOOL_ID,
     BRAIN_REASONING_TOOL_ID,
     ELEVENLABS_VOICE_TOOL_ID,
     HEYGEN_AVATAR_VIDEO_TOOL_ID,
@@ -19,7 +18,6 @@ import {
 
 const EXPECTED_TOOLS = [
     [BRAIN_REASONING_TOOL_ID, 'brain-router'],
-    [ANTHROPIC_ASSISTANT_TOOL_ID, 'anthropic'],
     [MUAPI_IMAGE_TOOL_ID, 'muapi'],
     [MUAPI_VIDEO_TOOL_ID, 'muapi'],
     [OPENAI_IMAGE_TOOL_ID, 'openai'],

@@ -20,6 +20,7 @@ export const STUDIO_NAVIGATION = Object.freeze([
     { id: 'marketing', label: 'Marketing Studio', path: '/studio/apps/marketing', section: 'apps' },
     { id: 'edit-studio', label: 'Edit Studio', path: '/studio/apps/edit-studio', section: 'apps' },
     { id: 'workflow-run', label: 'Workflow Run', path: '/studio/apps/workflow-run', section: 'apps' },
+    { id: 'agent-team', label: 'Agent Team', path: '/studio/apps/agent-team', section: 'apps' },
     { id: 'workflows', label: 'Workflows', path: '/studio/workflows', section: 'primary' },
     { id: 'projects', label: 'Projects', path: '/studio/projects', section: 'primary' },
     { id: 'assets', label: 'Assets', path: '/studio/assets', section: 'primary' },
