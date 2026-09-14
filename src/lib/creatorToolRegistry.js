@@ -7,6 +7,7 @@ export const ELEVENLABS_VOICE_TOOL_ID = 'elevenlabs_voice';
 export const HEYGEN_AVATAR_VIDEO_TOOL_ID = 'heygen_avatar_video';
 export const RUNWAY_VIDEO_TOOL_ID = 'runway_video';
 export const NVIDIA_IMAGE_TOOL_ID = 'nvidia_image';
+export const NVIDIA_VIDEO_TOOL_ID = 'nvidia_video';
 export const YOUTUBE_PUBLISH_TOOL_ID = 'youtube_publish';
 export const INSTAGRAM_PUBLISH_TOOL_ID = 'instagram_publish';
 export const TIKTOK_PUBLISH_TOOL_ID = 'tiktok_publish';
@@ -149,6 +150,17 @@ export const NVIDIA_IMAGE_TOOL = Object.freeze({
     returns: Object.freeze(['provider', 'toolId', 'kind', 'model', 'contentType', 'image', 'error']),
 });
 
+export const NVIDIA_VIDEO_TOOL = Object.freeze({
+    id: NVIDIA_VIDEO_TOOL_ID,
+    provider: 'nvidia',
+    label: 'NVIDIA Video',
+    purpose: 'Expose reviewed NVIDIA video-generation and finishing capabilities that authenticate with the server-owned NVIDIA Build credential.',
+    asynchronous: true,
+    deferred: true,
+    accepts: Object.freeze(['prompt', 'firstFrameUrl', 'inputVideoUrl', 'operation']),
+    returns: Object.freeze(['provider', 'toolId', 'model', 'status', 'output', 'error']),
+});
+
 export const YOUTUBE_PUBLISH_TOOL = Object.freeze({
     id: YOUTUBE_PUBLISH_TOOL_ID,
     provider: 'youtube',
@@ -228,6 +240,7 @@ const CREATOR_TOOL_REGISTRY = Object.freeze({
     [HEYGEN_AVATAR_VIDEO_TOOL_ID]: HEYGEN_AVATAR_VIDEO_TOOL,
     [RUNWAY_VIDEO_TOOL_ID]: RUNWAY_VIDEO_TOOL,
     [NVIDIA_IMAGE_TOOL_ID]: NVIDIA_IMAGE_TOOL,
+    [NVIDIA_VIDEO_TOOL_ID]: NVIDIA_VIDEO_TOOL,
     [YOUTUBE_PUBLISH_TOOL_ID]: YOUTUBE_PUBLISH_TOOL,
     [INSTAGRAM_PUBLISH_TOOL_ID]: INSTAGRAM_PUBLISH_TOOL,
     [TIKTOK_PUBLISH_TOOL_ID]: TIKTOK_PUBLISH_TOOL,
