@@ -1,9 +1,19 @@
+import { execFile } from 'node:child_process';
 import { createHmac, randomUUID } from 'node:crypto';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import { del as deleteBlob, get as getBlob, list as listBlobs, put as putBlob } from '@vercel/blob';
 
+import { buildFfmpegArgs, buildRenderPlan, CompositorError } from './creatorCompositor.js';
 import { storyboardToTimeline } from './creatorTimeline.js';
+
+const execFileAsync = promisify(execFile);
+const MAX_RENDERS = 20;
+const RENDER_TIMEOUT_MS = 4 * 60 * 1000;
 
 const PROJECT_ROOT = 'creator-projects';
 const ASSET_ROOT = 'creator-assets';
@@ -426,6 +436,7 @@ export async function createCreatorProject(user, input = {}, {
         timeline: storyboardToTimeline(emptyStoryboard(), []),
         workflowReferences: [],
         publishDrafts: [],
+        renders: [],
     };
     try {
         await writeProject(project, { configuration, blobStore, allowOverwrite: false });
@@ -571,6 +582,195 @@ export async function saveCreatorConversation(user, projectId, input = {}, {
     const next = updatedProject(project, { conversation }, now);
     await writeProject(next, { configuration, blobStore, allowOverwrite: true });
     return projectForClient(next);
+}
+
+function renderSummaryForClient(record) {
+    // Never leaks a local filesystem path or raw ffmpeg stderr -- only a
+    // short, already-sanitized error message (see downloadTo/runFfmpeg).
+    return { ...record };
+}
+
+async function downloadTo(url, destPath, { env, fetchImpl }) {
+    const safeUrl = safeCreatorAssetUrl(url, { env });
+    let response;
+    try {
+        response = await fetchImpl(safeUrl);
+    } catch {
+        throw new CreatorProjectError('render_source_unreachable', 'Could not download a required media source for this render.', 502);
+    }
+    if (!response.ok) {
+        throw new CreatorProjectError('render_source_unreachable', 'A required media source for this render is unavailable.', 502);
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    await writeFile(destPath, buffer);
+    return destPath;
+}
+
+async function resolveFfmpegPath() {
+    try {
+        const installed = await import('@ffmpeg-installer/ffmpeg');
+        const path = installed?.default?.path || installed?.path;
+        if (typeof path === 'string' && path) return path;
+    } catch {
+        // Falls through to the explicit "not available" error below --
+        // this is expected until `npm install` actually pulls the
+        // dependency added to package.json; render must fail cleanly, not
+        // crash the whole Creator API route, when it's missing.
+    }
+    throw new CreatorProjectError(
+        'render_engine_unavailable',
+        'The video render engine is not installed in this deployment yet (@ffmpeg-installer/ffmpeg).',
+        503,
+    );
+}
+
+async function runFfmpeg(args, { execFileImpl = execFileAsync } = {}) {
+    const ffmpegPath = await resolveFfmpegPath();
+    try {
+        await execFileImpl(ffmpegPath, args, { timeout: RENDER_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 });
+    } catch (error) {
+        // ffmpeg's own stderr can be long/noisy and could in principle
+        // echo back input it was given -- keep only a bounded, generic
+        // summary in the record a client can see.
+        const timedOut = error?.killed && error?.signal;
+        throw new CreatorProjectError(
+            'render_failed',
+            timedOut ? 'Render exceeded the time limit and was stopped.' : 'The render engine failed to produce a video.',
+            502,
+        );
+    }
+}
+
+// Executes the compositor end-to-end for a Project's CURRENT timeline
+// (derived fresh from its storyboard + assets, exactly like every other
+// read of `project.timeline`): downloads each clip/voice/music source,
+// invokes ffmpeg (creatorCompositor.js builds the exact command), uploads
+// the result as a new Project Asset, and records a durable render-history
+// entry either way. A failed render is recorded as FAILED, never silently
+// dropped or reported as success -- see creatorCompositor.js's module
+// docstring for what this v1 compositor does and does not yet do
+// (no real crossfades, no Ken Burns, clips are always silent).
+//
+// V1 executes synchronously within this call (no background job queue
+// exists in this codebase yet -- see docs/CREATOR_STUDIO_OS.md); bounded by
+// RENDER_TIMEOUT_MS so a request can't hang indefinitely. Real end-to-end
+// execution (ffmpeg actually installed and run, a live Blob upload) has NOT
+// been exercised in this environment -- creatorCompositor.js's pure
+// buildRenderPlan/buildFfmpegArgs functions are unit tested, this
+// orchestration function is BUILT, not yet live-verified. See
+// docs/CREATOR_STUDIO_OS.md's Built/Configured/Tested convention.
+export async function renderCreatorTimeline(user, projectId, input = {}, {
+    env = process.env,
+    blobStore = defaultBlobStore,
+    now = Date.now(),
+    idGenerator = randomUUID,
+    fetchImpl = fetch,
+    execFileImpl = execFileAsync,
+} = {}) {
+    const { configuration, owner } = storeContext(user, env);
+    const id = validProjectId(projectId);
+    const project = await readProject(owner, id, { configuration, blobStore });
+    assertExpectedRevision(project, input.expectedRevision);
+
+    const renderId = idGenerator();
+    const requestedAt = new Date(now).toISOString();
+    let tmpDir = null;
+    let record;
+    let updatedAssets = project.assets;
+
+    try {
+        let plan;
+        try {
+            plan = buildRenderPlan(project.timeline);
+        } catch (error) {
+            if (error instanceof CompositorError) {
+                throw new CreatorProjectError(`render_${error.code}`, error.message, 422);
+            }
+            throw error;
+        }
+
+        tmpDir = await mkdtemp(join(tmpdir(), 'creator-render-'));
+        const clipFilePaths = [];
+        for (const [index, clip] of plan.clips.entries()) {
+            const ext = clip.sourceType === 'video' ? 'mp4' : 'img';
+            const destPath = join(tmpDir, `clip-${index}.${ext}`);
+            await downloadTo(clip.sourceUrl, destPath, { env, fetchImpl });
+            clipFilePaths.push(destPath);
+        }
+        let voiceFilePath = null;
+        if (plan.voiceTrack) {
+            voiceFilePath = join(tmpDir, 'voice.audio');
+            await downloadTo(plan.voiceTrack.url, voiceFilePath, { env, fetchImpl });
+        }
+        let musicFilePath = null;
+        if (plan.musicTrack) {
+            musicFilePath = join(tmpDir, 'music.audio');
+            await downloadTo(plan.musicTrack.url, musicFilePath, { env, fetchImpl });
+        }
+
+        const outputPath = join(tmpDir, 'output.mp4');
+        const args = buildFfmpegArgs(plan, { clipFilePaths, voiceFilePath, musicFilePath, outputPath });
+        await runFfmpeg(args, { execFileImpl });
+
+        const outputBuffer = await readFile(outputPath);
+        if (project.assets.length >= MAX_ASSETS) {
+            throw new CreatorProjectError('asset_limit', `A Project supports at most ${MAX_ASSETS} Assets.`, 409);
+        }
+        const uploadPath = `${creatorAssetUploadPrefix(id)}render-${renderId}.mp4`;
+        const uploaded = await blobStore.put(uploadPath, outputBuffer, {
+            ...blobOptions(configuration),
+            access: 'public',
+            addRandomSuffix: false,
+            allowOverwrite: false,
+            contentType: 'video/mp4',
+        });
+        const asset = normalizeAssetInput({
+            type: 'video',
+            title: `Render ${new Date(now).toLocaleString()}`,
+            url: uploaded.url,
+            storagePath: uploadPath,
+            source: 'render',
+            mimeType: 'video/mp4',
+            size: outputBuffer.length,
+        }, { env, projectId: id, now, idGenerator });
+        updatedAssets = [asset, ...project.assets];
+
+        record = {
+            id: renderId,
+            status: 'complete',
+            requestedAt,
+            completedAt: new Date(now).toISOString(),
+            error: null,
+            outputAssetId: asset.id,
+            clipCount: plan.clips.length,
+            totalDuration: plan.totalDuration,
+        };
+    } catch (error) {
+        const failure = error instanceof CreatorProjectError
+            ? error
+            : new CreatorProjectError('render_failed', 'The render could not be completed.', 502);
+        record = {
+            id: renderId,
+            status: 'failed',
+            requestedAt,
+            completedAt: new Date(now).toISOString(),
+            error: failure.message,
+            outputAssetId: null,
+            clipCount: Array.isArray(project.timeline?.clips) ? project.timeline.clips.length : 0,
+            totalDuration: null,
+        };
+    } finally {
+        if (tmpDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+
+    const renders = [record, ...(Array.isArray(project.renders) ? project.renders : [])].slice(0, MAX_RENDERS);
+    const next = updatedProject(project, {
+        assets: updatedAssets,
+        timeline: storyboardToTimeline(project.storyboard, updatedAssets),
+        renders,
+    }, now);
+    await writeProject(next, { configuration, blobStore, allowOverwrite: true });
+    return { project: projectForClient(next), render: renderSummaryForClient(record) };
 }
 
 export function creatorProjectStoreForTests(records = new Map(), { now = Date.now() } = {}) {

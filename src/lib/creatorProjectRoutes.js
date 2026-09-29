@@ -13,6 +13,7 @@ import {
     getCreatorProject,
     listCreatorProjects,
     renameCreatorProject,
+    renderCreatorTimeline,
     saveCreatorConversation,
     saveCreatorStoryboard,
 } from './creatorProjectStore.js';
@@ -199,6 +200,16 @@ export async function handleCreatorProjectRoute(request, {
             const input = await parseProjectJson(request, env);
             const project = await saveCreatorConversation(auth.user, path[0], input, { env, blobStore, now });
             return creatorJson({ project });
+        }
+        if (normalizedMethod === 'POST' && path.length === 2 && path[1] === 'render') {
+            const input = await parseProjectJson(request, env).catch((error) => {
+                // A render request has no required body -- an empty/absent
+                // body is fine, only a genuinely malformed one is rejected.
+                if (error instanceof CreatorProjectError && error.code === 'invalid_json') return {};
+                throw error;
+            });
+            const result = await renderCreatorTimeline(auth.user, path[0], input, { env, blobStore, now });
+            return creatorJson(result, result.render.status === 'complete' ? 201 : 502);
         }
         return creatorJson({ error: 'Creator Project route not found.' }, 404);
     } catch (error) {
