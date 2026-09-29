@@ -48,7 +48,11 @@ function geminiSuccess(text = 'Gemini plan') {
 
 function compatibleSuccess(provider, text = `${provider} plan`) {
     return new Response(JSON.stringify({
-        model: provider === 'groq' ? 'openai/gpt-oss-120b' : 'selected/free-model',
+        model: provider === 'groq'
+            ? 'openai/gpt-oss-120b'
+            : provider === 'nvidia'
+                ? 'nvidia/llama-3.1-nemotron-70b-instruct'
+                : 'selected/free-model',
         choices: [{
             message: { role: 'assistant', content: text },
             finish_reason: 'stop',
@@ -133,6 +137,42 @@ test('OpenRouter adapter uses the current free router and reports the model actu
     assert.equal(JSON.parse(captured.options.body).model, 'openrouter/free');
     assert.equal(result.provider, 'openrouter');
     assert.equal(result.model, 'selected/free-model');
+});
+
+test('NVIDIA NIM adapter (Nemotron) uses the OpenAI-compatible endpoint and stays opt-in', async () => {
+    let captured;
+    const result = await reasonWithBrain(request, {
+        env: {
+            ...baseEnv,
+            BRAIN_PROVIDER: 'nvidia',
+            BRAIN_ENABLE_AUTOMATIC_FALLBACK: 'false',
+            NVIDIA_API_KEY: 'nvidia-test-provider-secret',
+            NVIDIA_MODEL: 'nvidia/llama-3.1-nemotron-70b-instruct',
+        },
+        fetchImpl: async (url, options) => {
+            captured = { url, options };
+            return compatibleSuccess('nvidia');
+        },
+    });
+
+    assert.equal(captured.url, 'https://integrate.api.nvidia.com/v1/chat/completions');
+    assert.equal(captured.options.headers.authorization, 'Bearer nvidia-test-provider-secret');
+    assert.equal(captured.options.body.includes('nvidia-test-provider-secret'), false);
+    assert.equal(result.provider, 'nvidia');
+    assert.equal(result.model, 'nvidia/llama-3.1-nemotron-70b-instruct');
+});
+
+test('NVIDIA is not selected or configured by default -- adding it changes nothing for existing deployments', () => {
+    const configuration = getBrainConfiguration(baseEnv);
+    assert.equal(configuration.selectedProvider, 'gemini');
+    assert.deepEqual(configuration.fallbackOrder, ['gemini', 'groq', 'openrouter']);
+
+    const statuses = brainProviderStatuses(baseEnv);
+    const nvidia = statuses.find((entry) => entry.id === 'nvidia');
+    assert.ok(nvidia, 'nvidia should be listed as a known provider');
+    assert.equal(nvidia.configured, false, 'nvidia has no key in baseEnv, so it must report unconfigured');
+    assert.equal(nvidia.selected, false);
+    assert.equal(nvidia.inFallbackOrder, false);
 });
 
 test('Anthropic remains available through the normalized brain interface', async () => {

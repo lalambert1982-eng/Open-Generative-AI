@@ -4,6 +4,19 @@ const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
+// NVIDIA NIM (build.nvidia.com/integrate.api.nvidia.com) -- OpenAI-chat-
+// completions compatible, serves Nemotron and other NVIDIA-hosted models.
+const NVIDIA_API_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
+
+// URL lookup for every provider whose wire protocol is OpenAI chat
+// completions (groq/openrouter/nvidia all share callOpenAiCompatible below;
+// gemini and anthropic each keep their own adapter because their
+// request/response shape genuinely differs).
+const OPENAI_COMPATIBLE_URLS = Object.freeze({
+    groq: GROQ_API_URL,
+    openrouter: OPENROUTER_API_URL,
+    nvidia: NVIDIA_API_URL,
+});
 
 const DEFAULT_TIMEOUT_MS = 45_000;
 const MAX_PROVIDER_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -17,6 +30,7 @@ export const BRAIN_PROVIDER_IDS = Object.freeze([
     'groq',
     'openrouter',
     'anthropic',
+    'nvidia',
 ]);
 
 export const BRAIN_SENSITIVITIES = Object.freeze([
@@ -31,6 +45,10 @@ export const DEFAULT_BRAIN_MODELS = Object.freeze({
     groq: 'openai/gpt-oss-120b',
     openrouter: 'openrouter/free',
     anthropic: 'claude-sonnet-5',
+    // Matches G.FURY AI Workforce's NVIDIAProvider default
+    // (backend/workforce/providers/nvidia_provider.py) so both G.FURY
+    // products agree on NVIDIA's current default model.
+    nvidia: 'nvidia/llama-3.1-nemotron-70b-instruct',
 });
 
 const PROVIDER_DEFINITIONS = Object.freeze({
@@ -57,6 +75,12 @@ const PROVIDER_DEFINITIONS = Object.freeze({
         label: 'Anthropic',
         keyVariable: 'ANTHROPIC_API_KEY',
         modelVariable: 'ANTHROPIC_MODEL',
+    }),
+    nvidia: Object.freeze({
+        id: 'nvidia',
+        label: 'NVIDIA NIM',
+        keyVariable: 'NVIDIA_API_KEY',
+        modelVariable: 'NVIDIA_MODEL',
     }),
 });
 
@@ -615,7 +639,7 @@ function openAiResponseFormat(request) {
 
 async function callOpenAiCompatible(provider, request, { env, fetchImpl, model, key }) {
     const prompts = brainPrompts(request, env);
-    const url = provider === 'groq' ? GROQ_API_URL : OPENROUTER_API_URL;
+    const url = OPENAI_COMPATIBLE_URLS[provider];
     const body = {
         model,
         messages: [
@@ -725,6 +749,7 @@ const PROVIDER_CALLERS = Object.freeze({
     groq: (request, options) => callOpenAiCompatible('groq', request, options),
     openrouter: (request, options) => callOpenAiCompatible('openrouter', request, options),
     anthropic: callAnthropic,
+    nvidia: (request, options) => callOpenAiCompatible('nvidia', request, options),
 });
 
 export class BrainRouterError extends Error {

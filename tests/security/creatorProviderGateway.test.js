@@ -206,6 +206,7 @@ test('provider status reports readiness without disclosing provider credentials'
         'groq',
         'openrouter',
         'anthropic',
+        'nvidia',
     ]);
     assert.deepEqual(body.generationProviders.map((provider) => provider.id), [
         'muapi',
