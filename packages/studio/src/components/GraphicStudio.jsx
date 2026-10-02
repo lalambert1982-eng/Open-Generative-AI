@@ -4,11 +4,13 @@ import React, { useState } from "react";
 import DesignAgentStudio from "./DesignAgentStudio";
 import ImageStudio from "./ImageStudio";
 import LayersStudio from "./LayersStudio";
+import LayoutStudio from "./LayoutStudio";
 
 const MODES = [
   { id: "canvas", label: "Creative Canvas", description: "Conversational design and asset-aware editing" },
   { id: "image", label: "Generate & Edit", description: "Image generation, uploads, drawing, text, shapes, undo, and redo" },
   { id: "layers", label: "Layers", description: "Layer decomposition and advanced composition" },
+  { id: "layout", label: "Layout", description: "Local social-graphic layouts with brand colors, layers, and PNG export" },
 ];
 
 export default function GraphicStudio({
@@ -68,6 +70,7 @@ export default function GraphicStudio({
         {mode === "canvas" && <DesignAgentStudio {...shared} />}
         {mode === "image" && <ImageStudio {...shared} initialAsset={initialAsset} />}
         {mode === "layers" && <LayersStudio {...shared} />}
+        {mode === "layout" && <LayoutStudio />}
       </div>
     </div>
   );
