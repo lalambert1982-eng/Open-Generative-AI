@@ -3,7 +3,14 @@ import { evaluateJsonSafety } from './contentSafety.js';
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const NVIDIA_API_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
 const MUAPI_API_BASE = 'https://api.muapi.ai';
+
+const OPENAI_COMPATIBLE_URLS = Object.freeze({
+    groq: GROQ_API_URL,
+    openrouter: OPENROUTER_API_URL,
+    nvidia: NVIDIA_API_URL,
+});
 
 const DEFAULT_TIMEOUT_MS = 45_000;
 const MUAPI_AGENT_DEFAULT_POLL_INTERVAL_MS = 2_000;
@@ -19,9 +26,11 @@ export const BRAIN_PROVIDER_IDS = Object.freeze([
     'gemini',
     'groq',
     'openrouter',
+    'nvidia',
 ]);
 
 export const DEFAULT_BRAIN_PROVIDER = 'muapi-agent';
+// NVIDIA is deliberately absent: it is opt-in via BRAIN_PROVIDER or BRAIN_FALLBACK_ORDER.
 export const DEFAULT_BRAIN_FALLBACK_ORDER = Object.freeze(['muapi-agent', 'gemini', 'groq', 'openrouter']);
 export const DEFAULT_MUAPI_AGENT_SLUG = 'selena';
 
@@ -37,6 +46,7 @@ export const DEFAULT_BRAIN_MODELS = Object.freeze({
     gemini: 'gemini-3.7-flash',
     groq: 'openai/gpt-oss-120b',
     openrouter: 'openrouter/free',
+    nvidia: 'nvidia/nemotron-3.5-lightning-30b-a3b',
 });
 
 function muapiAgentKeyVariable(env) {
@@ -70,6 +80,14 @@ const PROVIDER_DEFINITIONS = Object.freeze({
         label: 'OpenRouter',
         keyVariable: 'OPENROUTER_API_KEY',
         modelVariable: 'OPENROUTER_MODEL',
+    }),
+    nvidia: Object.freeze({
+        id: 'nvidia',
+        label: 'NVIDIA NIM',
+        keyVariable: 'NVIDIA_API_KEY',
+        // Distinct from any NVIDIA media-model variable; NVIDIA_MODEL is the legacy alias.
+        modelVariable: 'NVIDIA_BRAIN_MODEL',
+        legacyModelVariable: 'NVIDIA_MODEL',
     }),
 });
 
@@ -134,7 +152,9 @@ function strictAttempts(value) {
 
 function modelFor(provider, env) {
     const definition = PROVIDER_DEFINITIONS[provider];
-    return normalizedSecret(env[definition.modelVariable]) || DEFAULT_BRAIN_MODELS[provider];
+    return normalizedSecret(env[definition.modelVariable]) ||
+        (definition.legacyModelVariable ? normalizedSecret(env[definition.legacyModelVariable]) : '') ||
+        DEFAULT_BRAIN_MODELS[provider];
 }
 
 function providerKey(provider, env) {
@@ -625,7 +645,7 @@ function openAiResponseFormat(request) {
 
 async function callOpenAiCompatible(provider, request, { env, fetchImpl, model, key }) {
     const prompts = brainPrompts(request, env);
-    const url = provider === 'groq' ? GROQ_API_URL : OPENROUTER_API_URL;
+    const url = OPENAI_COMPATIBLE_URLS[provider];
     const body = {
         model,
         messages: [
@@ -794,6 +814,7 @@ const PROVIDER_CALLERS = Object.freeze({
     gemini: callGemini,
     groq: (request, options) => callOpenAiCompatible('groq', request, options),
     openrouter: (request, options) => callOpenAiCompatible('openrouter', request, options),
+    nvidia: (request, options) => callOpenAiCompatible('nvidia', request, options),
 });
 
 export class BrainRouterError extends Error {

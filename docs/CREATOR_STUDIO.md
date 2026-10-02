@@ -12,6 +12,7 @@ Creator Studio is the private creative operating-system shell. Selena is its pri
 | Secondary fallback | Google Gemini | `GEMINI_API_KEY` | `GEMINI_MODEL` |
 | Tertiary fallback | Groq | `GROQ_API_KEY` | `GROQ_MODEL` |
 | Development fallback | OpenRouter | `OPENROUTER_API_KEY` | `OPENROUTER_MODEL` |
+| Optional (opt-in only) | NVIDIA NIM | `NVIDIA_API_KEY` | `NVIDIA_BRAIN_MODEL` (legacy alias `NVIDIA_MODEL`) |
 
 ### Generation and publishing providers
 
