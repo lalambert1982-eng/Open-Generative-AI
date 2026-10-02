@@ -12,7 +12,7 @@ import {
 import { NVIDIA_IMAGE_TOOL_ID } from '../../src/lib/creatorToolRegistry.js';
 
 const providerKey = 'nvidia-image-test-provider-secret';
-const configuredEnv = { NVIDIA_API_KEY: providerKey };
+const configuredEnv = { NVIDIA_API_KEY: providerKey, NVIDIA_IMAGE_ENABLED: 'true' };
 
 const onePixelPng = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
@@ -53,11 +53,17 @@ test('a client-supplied model field is rejected rather than forwarded upstream',
 test('NVIDIA Image Generation reports missing configuration without a key', () => {
     const configuration = nvidiaImageConfiguration({});
     assert.equal(configuration.configured, false);
-    assert.deepEqual(configuration.missing, ['NVIDIA_API_KEY']);
+    assert.deepEqual(configuration.missing, ['NVIDIA_API_KEY', 'NVIDIA_IMAGE_ENABLED=true']);
 
     const normalized = normalizeNvidiaImageRequest({ prompt: 'A neon skyline.' }, { env: {} });
     assert.equal(normalized.error, 'NVIDIA Image Generation is not configured.');
-    assert.deepEqual(normalized.missing, ['NVIDIA_API_KEY']);
+    assert.deepEqual(normalized.missing, ['NVIDIA_API_KEY', 'NVIDIA_IMAGE_ENABLED=true']);
+});
+
+test('the shared NVIDIA brain key alone never enables billable image generation', () => {
+    const configuration = nvidiaImageConfiguration({ NVIDIA_API_KEY: providerKey });
+    assert.equal(configuration.configured, false);
+    assert.deepEqual(configuration.missing, ['NVIDIA_IMAGE_ENABLED=true']);
 });
 
 test('image generation requests normalize prompt, aspect ratio, seed, and steps without a reference image', () => {

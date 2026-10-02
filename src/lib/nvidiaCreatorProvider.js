@@ -73,6 +73,9 @@ export function nvidiaImageConfiguration(env = process.env) {
     const apiKey = normalizedString(env.NVIDIA_API_KEY);
     const missing = [];
     if (!configuredApiKey(apiKey)) missing.push('NVIDIA_API_KEY');
+    // NVIDIA_API_KEY also enables the opt-in NVIDIA brain; image generation is
+    // a separate (billable) capability and needs its own explicit switch.
+    if (normalizedString(env.NVIDIA_IMAGE_ENABLED).toLowerCase() !== 'true') missing.push('NVIDIA_IMAGE_ENABLED=true');
     return {
         configured: missing.length === 0,
         missing,

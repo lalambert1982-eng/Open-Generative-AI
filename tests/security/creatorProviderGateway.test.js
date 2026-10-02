@@ -184,6 +184,7 @@ test('provider status reports readiness without disclosing provider credentials'
         env: {
             ...baseEnv,
             ...secrets,
+            NVIDIA_IMAGE_ENABLED: 'true',
             MUAPI_KEY_MODE: 'sandbox',
             MUAPI_ALLOW_PAID_GENERATION: 'false',
         },
@@ -410,7 +411,7 @@ test('NVIDIA image proxy returns image bytes without exposing the API key', asyn
     const response = await handleNvidiaImage(
         creatorRequest('nvidia-image', { prompt: 'A dramatic track stadium at sunset.', aspectRatio: '16:9' }),
         {
-            env: { ...baseEnv, NVIDIA_API_KEY: providerKey },
+            env: { ...baseEnv, NVIDIA_API_KEY: providerKey, NVIDIA_IMAGE_ENABLED: 'true' },
             fetchImpl: async (url, options) => {
                 captured = { url, options };
                 return new Response(JSON.stringify({
@@ -438,13 +439,13 @@ test('NVIDIA image proxy rejects unauthenticated and cross-origin requests befor
     let called = false;
     const unauthenticated = await handleNvidiaImage(
         creatorRequest('nvidia-image', { prompt: 'x' }, ''),
-        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
+        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret', NVIDIA_IMAGE_ENABLED: 'true' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
     );
     assert.equal(unauthenticated.status, 401);
 
     const crossOrigin = await handleNvidiaImage(
         creatorRequest('nvidia-image', { prompt: 'x' }, session, { origin: 'https://attacker.test', 'sec-fetch-site': 'cross-site' }),
-        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
+        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret', NVIDIA_IMAGE_ENABLED: 'true' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
     );
     assert.equal(crossOrigin.status, 403);
     assert.equal(called, false);
@@ -459,7 +460,7 @@ test('NVIDIA image proxy reports missing configuration without calling the provi
     );
     const body = await response.json();
     assert.equal(response.status, 503);
-    assert.deepEqual(body.missing, ['NVIDIA_API_KEY']);
+    assert.deepEqual(body.missing, ['NVIDIA_API_KEY', 'NVIDIA_IMAGE_ENABLED=true']);
     assert.equal(called, false);
 });
 
@@ -476,7 +477,7 @@ test('NVIDIA image edit requests carry a realistic reference image through the g
     const response = await handleNvidiaImage(
         creatorRequest('nvidia-image', { prompt: 'Add dramatic rim lighting.', referenceImage }),
         {
-            env: { ...baseEnv, NVIDIA_API_KEY: providerKey },
+            env: { ...baseEnv, NVIDIA_API_KEY: providerKey, NVIDIA_IMAGE_ENABLED: 'true' },
             fetchImpl: async (url, options) => {
                 captured = { url, options };
                 return new Response(JSON.stringify({
@@ -496,13 +497,13 @@ test('NVIDIA image edit requests still reject unauthenticated and cross-origin a
     const referenceImage = `data:image/png;base64,${'A'.repeat(2 * 1024 * 1024)}`;
     const unauthenticated = await handleNvidiaImage(
         creatorRequest('nvidia-image', { prompt: 'Edit it.', referenceImage }, ''),
-        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
+        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret', NVIDIA_IMAGE_ENABLED: 'true' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
     );
     assert.equal(unauthenticated.status, 401);
 
     const crossOrigin = await handleNvidiaImage(
         creatorRequest('nvidia-image', { prompt: 'Edit it.', referenceImage }, session, { origin: 'https://attacker.test', 'sec-fetch-site': 'cross-site' }),
-        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
+        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret', NVIDIA_IMAGE_ENABLED: 'true' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
     );
     assert.equal(crossOrigin.status, 403);
     assert.equal(called, false);
@@ -511,7 +512,7 @@ test('NVIDIA image edit requests still reject unauthenticated and cross-origin a
 test('NVIDIA image edit requests remain subject to the Creator Studio per-identity rate limit', async () => {
     resetRateLimitStore();
     const referenceImage = `data:image/png;base64,${'A'.repeat(1024)}`;
-    const env = { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret', CREATOR_STUDIO_RATE_LIMIT: '1' };
+    const env = { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret', NVIDIA_IMAGE_ENABLED: 'true', CREATOR_STUDIO_RATE_LIMIT: '1' };
     const fetchImpl = async () => new Response(JSON.stringify({
         artifacts: [{ base64: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64') }],
     }), { status: 200 });
@@ -531,7 +532,7 @@ test('a reference image over the provider size cap is rejected without calling N
     const referenceImage = `data:image/png;base64,${'A'.repeat(12_000_000)}`;
     const response = await handleNvidiaImage(
         creatorRequest('nvidia-image', { prompt: 'Edit it.', referenceImage }),
-        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
+        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret', NVIDIA_IMAGE_ENABLED: 'true' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
     );
     const body = await response.json();
     assert.equal(response.status, 400);
@@ -548,7 +549,7 @@ test('a request body over the gateway NVIDIA image ceiling is rejected before pa
     const referenceImage = `data:image/png;base64,${'A'.repeat(20_000_000)}`;
     const response = await handleNvidiaImage(
         creatorRequest('nvidia-image', { prompt: 'Edit it.', referenceImage }),
-        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
+        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret', NVIDIA_IMAGE_ENABLED: 'true' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
     );
     assert.equal(response.status, 413);
     assert.equal(called, false);
@@ -557,7 +558,7 @@ test('a request body over the gateway NVIDIA image ceiling is rejected before pa
 test('provider status lists NVIDIA Image Generation distinct from the NVIDIA-backed Selena Brain', async () => {
     resetRateLimitStore();
     const response = await handleCreatorProviders(creatorRequest('providers'), {
-        env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret', BRAIN_PROVIDER: 'nvidia' },
+        env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret', NVIDIA_IMAGE_ENABLED: 'true', BRAIN_PROVIDER: 'nvidia' },
     });
     const body = await response.json();
     const nvidiaImage = body.providers.find((provider) => provider.id === 'nvidia-image');

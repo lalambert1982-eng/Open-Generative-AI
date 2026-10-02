@@ -33,7 +33,11 @@ import {
     getMuapiGenerationJob,
     muapiProviderStatus,
 } from './muapiCreatorProvider.js';
-import { createNvidiaImageGeneration, nvidiaImageProviderStatus } from './nvidiaCreatorProvider.js';
+import {
+    createNvidiaImageGeneration,
+    nvidiaImageConfiguration,
+    nvidiaImageProviderStatus,
+} from './nvidiaCreatorProvider.js';
 import { checkRateLimit } from './rateLimit.js';
 import { CreatorProjectError, getCreatorProject } from './creatorProjectStore.js';
 import {
@@ -547,6 +551,10 @@ export async function handleNvidiaImage(request, {
 } = {}) {
     const auth = authorizeCreatorRequest(request, { env, action: 'nvidia-image' });
     if (auth.response) return auth.response;
+    const configuration = nvidiaImageConfiguration(env);
+    if (!configuration.configured) {
+        return creatorJson({ error: 'NVIDIA Image Generation is not configured.', missing: configuration.missing }, 503);
+    }
     const parsed = await parseCreatorJson(request, { env, maxBytes: MAX_NVIDIA_IMAGE_JSON_BODY_BYTES });
     if (parsed.response) return parsed.response;
 
