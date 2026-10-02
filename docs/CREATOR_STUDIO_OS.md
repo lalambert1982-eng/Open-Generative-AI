@@ -131,7 +131,7 @@ The documented REST publish endpoints do not include `scheduled_at`. Scheduling 
 | Agent Blueprints role/routes | Yes | Requires legacy BYOK for MuAPI data | Automated route tests | No live create/chat test |
 | Graphic Studio wrapper | Yes | Creator CreativeCanvas uses server adapter; older modes retain BYOK | Proxy/security + compile/source tests | No live editor E2E |
 | Storyboard | Yes, with Project persistence and timeline manifest | Inherits Blob/MuAPI status | State/request/routing/manifest tests | No live Storyboard generation on this branch |
-| Timeline/compositor | v1 manifest only; renderer absent | Not applicable | Manifest tests | No |
+| Timeline/compositor | Yes: `creatorCompositor.js` (pure plan and ffmpeg-argv builder) plus `renderCreatorTimeline` and `POST /api/creator/projects/:id/render`. Fails closed unless `CREATOR_RENDER_ENABLED=true`. | Needs `CREATOR_RENDER_ENABLED`, `CREATOR_ASSET_BLOB_READ_WRITE_TOKEN`, a function duration of at least about 4 minutes, and `CREATOR_RENDER_FONT_FILE` for captions | Plan/argv unit tests, orchestration tests with fake ffmpeg/Blob, and one local end-to-end render with the bundled ffmpeg binary | No live Vercel render. v1 scope: hard cuts only (other transitions render as cuts), silent clips, burned-in captions, voice plus ducked music |
 | Workflow | Preserved | Requires legacy BYOK | Production build only in this pass | Not claimed |
 | Durable Projects/Assets | Yes | Requires target Blob configuration | Ownership, upload-policy, persistence, deletion, and handoff tests | No live owner E2E |
 | YouTube | Preserved | Environment-specific | Existing security tests; no live publish | No new claim |

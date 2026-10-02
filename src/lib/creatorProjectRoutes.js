@@ -13,6 +13,7 @@ import {
     getCreatorProject,
     listCreatorProjects,
     renameCreatorProject,
+    renderCreatorTimeline,
     saveCreatorConversation,
     saveCreatorStoryboard,
 } from './creatorProjectStore.js';
@@ -208,6 +209,21 @@ export async function handleCreatorProjectRoute(request, {
             const input = await parseProjectJson(request, env);
             const project = await saveCreatorConversation(auth.user, path[0], input, { env, blobStore, now });
             return creatorJson({ project });
+        }
+        if (normalizedMethod === 'POST' && path.length === 2 && path[1] === 'render') {
+            const input = await parseProjectJson(request, env).catch((error) => {
+                if (error instanceof CreatorProjectError && error.code === 'invalid_json') return {};
+                throw error;
+            });
+            const { status, ...result } = await renderCreatorTimeline(auth.user, path[0], input, {
+                env,
+                blobStore,
+                assetBlobStore: blobStore,
+                now,
+                idGenerator,
+                fetchImpl,
+            });
+            return creatorJson(result, status);
         }
         if (normalizedMethod === 'GET' && path.length === 2 && path[1] === 'workflows') {
             const project = await getCreatorProject(auth.user, path[0], { env, blobStore });
