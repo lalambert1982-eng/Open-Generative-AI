@@ -20,8 +20,9 @@ const MAX_SCENES = 100;
 const MAX_MESSAGES = 50;
 const MAX_PROJECT_BYTES = 1024 * 1024;
 const MAX_RENDERS = 20;
-const RENDER_TIMEOUT_MS = 4 * 60 * 1000;
+const DEFAULT_RENDER_BUDGET_MS = 4 * 60 * 1000;
 const RENDER_SOURCE_TIMEOUT_MS = 60 * 1000;
+const RENDER_COMMIT_ATTEMPTS = 3;
 const MAX_RENDER_SOURCE_BYTES = 250 * 1024 * 1024;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,139}$/;
@@ -638,15 +639,30 @@ export function creatorRenderEnabled(env = process.env) {
     return normalized(env.CREATOR_RENDER_ENABLED).toLowerCase() === 'true';
 }
 
-async function downloadRenderSource(url, destPath, { env, fetchImpl }) {
+// One wall-clock budget covers downloads, ffmpeg, and upload; it must fit
+// inside the hosting function's maxDuration.
+function renderBudgetMs(env) {
+    return boundedInteger(env.CREATOR_RENDER_MAX_MS, DEFAULT_RENDER_BUDGET_MS, 30_000, 780_000);
+}
+
+function remainingMs(deadline) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+        throw new CreatorProjectError('render_timeout', 'Render exceeded its time budget and was stopped.', 504);
+    }
+    return remaining;
+}
+
+async function downloadRenderSource(url, destPath, { env, fetchImpl, deadline }) {
     const safeUrl = safeCreatorAssetUrl(url, { env });
     let response;
     try {
         response = await fetchImpl(safeUrl, {
             redirect: 'error',
-            signal: AbortSignal.timeout(RENDER_SOURCE_TIMEOUT_MS),
+            signal: AbortSignal.timeout(Math.min(RENDER_SOURCE_TIMEOUT_MS, remainingMs(deadline))),
         });
-    } catch {
+    } catch (error) {
+        if (error instanceof CreatorProjectError) throw error;
         throw new CreatorProjectError('render_source_unreachable', 'Could not download a required media source for this render.', 502);
     }
     if (!response.ok) {
@@ -670,10 +686,10 @@ async function resolveFfmpegPath() {
     throw new CreatorProjectError('render_engine_unavailable', 'The video render engine is not installed in this deployment.', 503);
 }
 
-async function runFfmpeg(args, { execFileImpl }) {
+async function runFfmpeg(args, { execFileImpl, deadline }) {
     const ffmpegPath = await resolveFfmpegPath();
     try {
-        await execFileImpl(ffmpegPath, args, { timeout: RENDER_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 });
+        await execFileImpl(ffmpegPath, args, { timeout: remainingMs(deadline), maxBuffer: 16 * 1024 * 1024 });
     } catch (error) {
         // Never surface ffmpeg stderr: it can echo input paths and content.
         throw new CreatorProjectError(
@@ -685,6 +701,7 @@ async function runFfmpeg(args, { execFileImpl }) {
 }
 
 async function produceRender(project, renderId, { env, fetchImpl, execFileImpl, assetBlobStore, assetConfiguration }) {
+    const deadline = Date.now() + renderBudgetMs(env);
     let plan;
     try {
         plan = buildRenderPlan(project.timeline);
@@ -700,18 +717,18 @@ async function produceRender(project, renderId, { env, fetchImpl, execFileImpl, 
         const clipFilePaths = [];
         for (const [index, clip] of plan.clips.entries()) {
             const destPath = join(tmpDir, `clip-${index}.${clip.sourceType === 'video' ? 'mp4' : 'img'}`);
-            await downloadRenderSource(clip.sourceUrl, destPath, { env, fetchImpl });
+            await downloadRenderSource(clip.sourceUrl, destPath, { env, fetchImpl, deadline });
             clipFilePaths.push(destPath);
         }
         let voiceFilePath = null;
         if (plan.voiceTrack) {
             voiceFilePath = join(tmpDir, 'voice.audio');
-            await downloadRenderSource(plan.voiceTrack.url, voiceFilePath, { env, fetchImpl });
+            await downloadRenderSource(plan.voiceTrack.url, voiceFilePath, { env, fetchImpl, deadline });
         }
         let musicFilePath = null;
         if (plan.musicTrack) {
             musicFilePath = join(tmpDir, 'music.audio');
-            await downloadRenderSource(plan.musicTrack.url, musicFilePath, { env, fetchImpl });
+            await downloadRenderSource(plan.musicTrack.url, musicFilePath, { env, fetchImpl, deadline });
         }
         const outputPath = join(tmpDir, 'output.mp4');
         let args;
@@ -727,7 +744,8 @@ async function produceRender(project, renderId, { env, fetchImpl, execFileImpl, 
             if (error instanceof CompositorError) throw new CreatorProjectError(`render_${error.code}`, error.message, 422);
             throw error;
         }
-        await runFfmpeg(args, { execFileImpl });
+        await runFfmpeg(args, { execFileImpl, deadline });
+        remainingMs(deadline);
         const outputBuffer = await readFile(outputPath);
         const storagePath = `${creatorAssetUploadPrefix(project.id)}render-${renderId}.mp4`;
         let uploaded;
@@ -755,9 +773,17 @@ async function produceRender(project, renderId, { env, fetchImpl, execFileImpl, 
 }
 
 // Renders the Project's current timeline synchronously (bounded by
-// RENDER_TIMEOUT_MS), then records the outcome through mutateCreatorProject so
+// CREATOR_RENDER_MAX_MS), then records the outcome through mutateCreatorProject so
 // edits made while ffmpeg ran are merged rather than overwritten. A failed
 // render is recorded as failed, never reported as success.
+async function discardRenderOutput(output, { assetBlobStore, assetConfiguration }) {
+    try {
+        await assetBlobStore.del(output.storagePath, { token: assetConfiguration.blobToken });
+    } catch {
+        // Best effort: an orphaned public render is harmless and listed under the Project prefix.
+    }
+}
+
 export async function renderCreatorTimeline(user, projectId, input = {}, {
     env = process.env,
     blobStore = defaultBlobStore,
@@ -791,10 +817,15 @@ export async function renderCreatorTimeline(user, projectId, input = {}, {
     }
 
     let record;
-    const project = await mutateCreatorProject(user, id, (current) => {
+    let assetLimitReached = false;
+    const recordOutcome = (current) => {
         let assets = current.assets;
         let asset = null;
-        if (output) {
+        assetLimitReached = Boolean(output) && current.assets.length >= MAX_ASSETS;
+        const outcomeFailure = assetLimitReached
+            ? new CreatorProjectError('asset_limit', `A Project supports at most ${MAX_ASSETS} Assets.`, 409)
+            : failure;
+        if (output && !assetLimitReached) {
             asset = normalizeAssetInput({
                 type: 'video',
                 title: `Render ${requestedAt}`,
@@ -808,21 +839,37 @@ export async function renderCreatorTimeline(user, projectId, input = {}, {
         }
         record = {
             id: renderId,
-            status: output ? 'complete' : 'failed',
+            status: asset ? 'complete' : 'failed',
             requestedAt,
-            completedAt: new Date(now).toISOString(),
-            error: failure ? failure.message : null,
-            code: failure ? failure.code : null,
+            completedAt: new Date().toISOString(),
+            error: outcomeFailure ? outcomeFailure.message : null,
+            code: outcomeFailure ? outcomeFailure.code : null,
             outputAssetId: asset ? asset.id : null,
             clipCount: output ? output.clipCount : (current.timeline?.clips?.length || 0),
-            totalDuration: output ? output.totalDuration : null,
+            totalDuration: asset ? output.totalDuration : null,
         };
         const renders = [record, ...(Array.isArray(current.renders) ? current.renders : [])].slice(0, MAX_RENDERS);
         return asset
             ? { assets, timeline: storyboardToTimeline(current.storyboard, assets), renders }
             : { renders };
-    }, { env, blobStore, now });
-    return { project, render: record, status: failure ? failure.status : 201 };
+    };
+
+    // A concurrent unqueued write (e.g. a Storyboard autosave) makes the commit
+    // fail with project_conflict; the mutator re-reads, so retrying is safe.
+    let project;
+    for (let attempt = 1; ; attempt += 1) {
+        try {
+            project = await mutateCreatorProject(user, id, recordOutcome, { env, blobStore, now });
+            break;
+        } catch (error) {
+            if (error?.code === 'project_conflict' && attempt < RENDER_COMMIT_ATTEMPTS) continue;
+            if (output) await discardRenderOutput(output, { assetBlobStore, assetConfiguration });
+            throw error;
+        }
+    }
+    if (assetLimitReached) await discardRenderOutput(output, { assetBlobStore, assetConfiguration });
+    const status = record.status === 'complete' ? 201 : (assetLimitReached ? 409 : failure.status);
+    return { project, render: record, status };
 }
 
 export function creatorProjectStoreForTests(records = new Map(), { now = Date.now() } = {}) {

@@ -35,6 +35,14 @@ const MUSIC_DUCK_VOLUME = 0.25;
 const MAX_CAPTIONS_RENDERED = 200;
 const MIN_DIMENSION = 64;
 const MAX_DIMENSION = 3840;
+const ASPECT_RESOLUTIONS = Object.freeze({
+    '16:9': Object.freeze({ width: 1920, height: 1080 }),
+    '9:16': Object.freeze({ width: 1080, height: 1920 }),
+    '1:1': Object.freeze({ width: 1080, height: 1080 }),
+});
+// Inputs are downloaded user media: the whitelist (inherited by nested opens)
+// stops a crafted file such as an HLS playlist from making ffmpeg fetch URLs.
+const SAFE_INPUT = Object.freeze(['-protocol_whitelist', 'file']);
 
 // drawtext runs with expansion=none, so % is literal; only the option-level
 // escapes remain. A straight quote becomes U+2019 because escaping it inside a
@@ -108,7 +116,10 @@ export function buildRenderPlan(timeline) {
         ? { url: timeline.musicTrack.url }
         : null;
 
-    const resolution = {
+    // The timeline manifest stores a fixed 1920x1080 resolution regardless of
+    // aspect ratio, so the aspect ratio decides the output frame when known.
+    const byAspect = ASPECT_RESOLUTIONS[timeline.aspectRatio];
+    const resolution = byAspect ? { ...byAspect } : {
         width: evenDimension(timeline?.resolution?.width, 1920),
         height: evenDimension(timeline?.resolution?.height, 1080),
     };
@@ -139,14 +150,14 @@ export function buildFfmpegArgs(plan, { clipFilePaths, voiceFilePath = null, mus
         throw new CompositorError('captions_font_missing', 'Captions need a server caption font (CREATOR_RENDER_FONT_FILE).');
     }
 
-    const args = ['-y'];
+    const args = ['-nostdin', '-y'];
     const inputArgs = [];
     plan.clips.forEach((clip, index) => {
         if (clip.sourceType === 'image') {
-            inputArgs.push('-loop', '1', '-t', String(clip.duration), '-i', clipFilePaths[index]);
+            inputArgs.push(...SAFE_INPUT, '-loop', '1', '-t', String(clip.duration), '-i', clipFilePaths[index]);
         } else {
             if (clip.trimStart > 0) inputArgs.push('-ss', String(clip.trimStart));
-            inputArgs.push('-t', String(clip.duration), '-i', clipFilePaths[index]);
+            inputArgs.push(...SAFE_INPUT, '-t', String(clip.duration), '-i', clipFilePaths[index]);
         }
     });
     let audioInputCount = 0;
@@ -154,12 +165,12 @@ export function buildFfmpegArgs(plan, { clipFilePaths, voiceFilePath = null, mus
     let musicInputIndex = null;
     if (voiceFilePath) {
         voiceInputIndex = plan.clips.length + audioInputCount;
-        inputArgs.push('-i', voiceFilePath);
+        inputArgs.push(...SAFE_INPUT, '-i', voiceFilePath);
         audioInputCount += 1;
     }
     if (musicFilePath) {
         musicInputIndex = plan.clips.length + audioInputCount;
-        inputArgs.push('-i', musicFilePath);
+        inputArgs.push(...SAFE_INPUT, '-i', musicFilePath);
         audioInputCount += 1;
     }
     args.push(...inputArgs);

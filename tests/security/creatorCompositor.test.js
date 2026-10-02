@@ -65,8 +65,8 @@ test('buildFfmpegArgs produces a single-clip, silent, captionless command', () =
     });
 
     assert.deepEqual(
-        args.slice(0, 7),
-        ['-y', '-loop', '1', '-t', '5', '-i', '/tmp/clip-1.png'],
+        args.slice(0, 10),
+        ['-nostdin', '-y', '-protocol_whitelist', 'file', '-loop', '1', '-t', '5', '-i', '/tmp/clip-1.png'],
     );
     const filterIndex = args.indexOf('-filter_complex');
     assert.ok(filterIndex > -1);
@@ -129,9 +129,27 @@ test('buildFfmpegArgs refuses captions without a caption font instead of failing
     );
 });
 
-test('buildRenderPlan bounds the output resolution to even, capped dimensions', () => {
-    const plan = buildRenderPlan(timelineWithClips([imageClip()], { resolution: { width: 100_001, height: 721 } }));
+test('buildRenderPlan bounds an explicit resolution to even, capped dimensions', () => {
+    const plan = buildRenderPlan(timelineWithClips([imageClip()], { aspectRatio: null, resolution: { width: 100_001, height: 721 } }));
     assert.deepEqual(plan.resolution, { width: 3840, height: 722 });
+});
+
+test('buildRenderPlan renders portrait and square storyboards at their own aspect ratio', () => {
+    assert.deepEqual(buildRenderPlan(timelineWithClips([imageClip()], { aspectRatio: '9:16' })).resolution, { width: 1080, height: 1920 });
+    assert.deepEqual(buildRenderPlan(timelineWithClips([imageClip()], { aspectRatio: '1:1' })).resolution, { width: 1080, height: 1080 });
+    assert.deepEqual(buildRenderPlan(timelineWithClips([imageClip()])).resolution, { width: 1920, height: 1080 });
+});
+
+test('every ffmpeg input is restricted to local files so crafted media cannot fetch URLs', () => {
+    const plan = buildRenderPlan(timelineWithClips([imageClip(), imageClip({ id: 'v', source: { url: 'https://cdn.muapi.ai/v.mp4', type: 'video' } })], {
+        voiceTrack: { url: 'https://cdn.muapi.ai/v.m4a' },
+    }));
+    const args = buildFfmpegArgs(plan, { clipFilePaths: ['/tmp/a', '/tmp/b'], voiceFilePath: '/tmp/v', outputPath: '/tmp/o.mp4' });
+    const inputs = args.reduce((count, arg) => count + (arg === '-i' ? 1 : 0), 0);
+    const whitelists = args.reduce((count, arg, index) => count + (arg === '-protocol_whitelist' && args[index + 1] === 'file' ? 1 : 0), 0);
+    assert.equal(inputs, 3);
+    assert.equal(whitelists, inputs);
+    assert.equal(args[0], '-nostdin');
 });
 
 test('buildFfmpegArgs mixes voice and music with music ducked, and maps both', () => {

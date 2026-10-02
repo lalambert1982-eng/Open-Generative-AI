@@ -55,6 +55,10 @@ function assetStore() {
     const puts = [];
     return {
         puts,
+        dels: [],
+        async del(pathname) {
+            this.dels.push(pathname);
+        },
         async put(pathname, body, options) {
             puts.push({ pathname, body, options });
             return { pathname, url: `https://store.public.blob.vercel-storage.com/${pathname}` };
@@ -187,4 +191,67 @@ test('the render route requires a signed-in same-origin request', async () => {
     }), { path: [projectId, 'render'], env: { ...env, CREATOR_RENDER_ENABLED: 'false' }, blobStore });
     assert.equal(disabled.status, 503);
     assert.equal((await disabled.json()).code, 'render_disabled');
+});
+
+function conflictingStore(blobStore) {
+    const state = { conflicts: 0, busy: false };
+    const store = {
+        ...blobStore,
+        async get(pathname, options) {
+            if (state.conflicts > 0 && !state.busy) {
+                state.conflicts -= 1;
+                state.busy = true;
+                try {
+                    await renameCreatorProject(owner, projectId, { name: `edit ${state.conflicts}` }, { env, blobStore: store });
+                } finally {
+                    state.busy = false;
+                }
+            }
+            return blobStore.get(pathname, options);
+        },
+    };
+    return { store, state };
+}
+
+test('a render commit retries after a concurrent Project write instead of discarding the render', async () => {
+    const base = creatorProjectStoreForTests();
+    await projectWithOneScene(base);
+    const { store, state } = conflictingStore(base);
+    const assets = assetStore();
+    const result = await renderCreatorTimeline(owner, projectId, {}, {
+        env, blobStore: store, assetBlobStore: assets, idGenerator, fetchImpl: mediaFetch(),
+        execFileImpl: async (path, args) => { await fakeFfmpeg(path, args); state.conflicts = 2; },
+    });
+    assert.equal(result.render.status, 'complete');
+    assert.equal(assets.dels.length, 0);
+    const stored = await getCreatorProject(owner, projectId, { env, blobStore: base });
+    assert.match(stored.name, /^edit /);
+    assert.equal(stored.assets[0].source, 'render');
+});
+
+test('when the commit keeps conflicting, the uploaded render is deleted rather than orphaned', async () => {
+    const base = creatorProjectStoreForTests();
+    await projectWithOneScene(base);
+    const { store, state } = conflictingStore(base);
+    const assets = assetStore();
+    await assert.rejects(
+        renderCreatorTimeline(owner, projectId, {}, {
+            env, blobStore: store, assetBlobStore: assets, idGenerator, fetchImpl: mediaFetch(),
+            execFileImpl: async (path, args) => { await fakeFfmpeg(path, args); state.conflicts = 100; },
+        }),
+        (error) => error.code === 'project_conflict',
+    );
+    assert.equal(assets.puts.length, 1);
+    assert.deepEqual(assets.dels, [assets.puts[0].pathname]);
+});
+
+test('ffmpeg is bounded by the overall render budget', async () => {
+    const blobStore = creatorProjectStoreForTests();
+    await projectWithOneScene(blobStore);
+    let timeout;
+    await renderCreatorTimeline(owner, projectId, {}, {
+        env: { ...env, CREATOR_RENDER_MAX_MS: '30000' }, blobStore, assetBlobStore: assetStore(), idGenerator, fetchImpl: mediaFetch(),
+        execFileImpl: async (path, args, options) => { timeout = options.timeout; await fakeFfmpeg(path, args); },
+    });
+    assert.ok(timeout > 0 && timeout <= 30_000);
 });
