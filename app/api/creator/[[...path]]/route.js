@@ -13,6 +13,7 @@ import {
     handleMuapiImage,
     handleMuapiStatus,
     handleMuapiVideo,
+    handleNvidiaImage,
 } from '../../../../src/lib/creatorProviderGateway.js';
 import { handleCreatorProjectRoute } from '../../../../src/lib/creatorProjectRoutes.js';
 
@@ -38,6 +39,8 @@ async function dispatch(request, context, method) {
             return handleMuapiImage(request);
         case 'POST:video':
             return handleMuapiVideo(request);
+        case 'POST:nvidia-image':
+            return handleNvidiaImage(request);
         case 'GET:muapi/status':
             return handleMuapiStatus(request);
         case 'POST:speech':

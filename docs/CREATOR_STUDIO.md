@@ -33,6 +33,7 @@ Every brain provider reports a `costTier` in `GET /api/creator/providers`: `paid
 | Storyboard text/image-to-video | MuAPI | Sandbox: `MUAPI_API_KEY`; paid Production: `MUAPI_PRODUCTION_API_KEY`; plus `MUAPI_KEY_MODE` and `MUAPI_ALLOW_PAID_GENERATION` |
 | Manual private publishing | YouTube + Vercel Blob | `YOUTUBE_OAUTH_CLIENT_ID`, `YOUTUBE_OAUTH_CLIENT_SECRET`, `YOUTUBE_OAUTH_CALLBACK_URL`, `YOUTUBE_TOKEN_ENCRYPTION_KEY`, `BLOB_READ_WRITE_TOKEN` |
 | Instagram/TikTok publishing | MuAPI Social | `MUAPI_SOCIAL_API_KEY` or `MUAPI_PRODUCTION_API_KEY`; `MUAPI_ALLOW_SOCIAL_PUBLISHING`; optional host/public-TikTok controls |
+| Optional NVIDIA image generation/editing | NVIDIA Build (FLUX.2 [klein] 4B) | `NVIDIA_API_KEY`, optional `NVIDIA_IMAGE_MODEL`; generation implemented, editing experimental, neither live-verified |
 
 The direct OpenAI image and Runway video adapters remain in the repository as deferred compatibility boundaries. They are not reachable from the active private Creator Studio dispatch or UI.
 
