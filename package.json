@@ -16,7 +16,7 @@
     "prebuild": "npm run build:packages",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint app components src middleware.js",
     "build:studio": "npm run build -w studio",
     "build:workflow": "npm run build -w workflow-builder",
     "build:agent": "npm run build -w ai-agent",
