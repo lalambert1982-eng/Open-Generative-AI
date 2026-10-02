@@ -1,7 +1,7 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
 
-import { del as deleteBlob, get as getBlob, list as listBlobs, put as putBlob } from '@vercel/blob';
+import { BlobPreconditionFailedError, del as deleteBlob, get as getBlob, list as listBlobs, put as putBlob } from '@vercel/blob';
 
 import { storyboardToTimeline } from './creatorTimeline.js';
 
@@ -337,23 +337,42 @@ function normalizeConversation(value) {
     };
 }
 
+// `ifMatch` is Vercel Blob's own conditional-write primitive (rejects the
+// write, atomically, if the blob's current ETag no longer matches). It's
+// what actually makes commitProjectPatch's write safe across two genuinely
+// concurrent writers — including two separate serverless instances, which
+// no in-process queue or read-then-compare-revision check alone can
+// coordinate, since both are separate round-trips with a gap between them.
 async function writeProject(project, {
     configuration,
     blobStore,
     allowOverwrite,
+    ifMatch,
 }) {
     const serialized = JSON.stringify(project);
     if (Buffer.byteLength(serialized, 'utf8') > MAX_PROJECT_BYTES) {
         throw new CreatorProjectError('project_too_large', 'Project manifest exceeds the 1 MB storage limit.', 413);
     }
-    await blobStore.put(projectPath(project.ownerSubject, project.id), serialized, {
-        ...blobOptions(configuration),
-        access: 'private',
-        addRandomSuffix: false,
-        allowOverwrite,
-        cacheControlMaxAge: 60,
-        contentType: 'application/json',
-    });
+    try {
+        await blobStore.put(projectPath(project.ownerSubject, project.id), serialized, {
+            ...blobOptions(configuration),
+            access: 'private',
+            addRandomSuffix: false,
+            allowOverwrite,
+            ...(ifMatch ? { ifMatch } : {}),
+            cacheControlMaxAge: 60,
+            contentType: 'application/json',
+        });
+    } catch (error) {
+        if (error instanceof BlobPreconditionFailedError) {
+            throw new CreatorProjectError('project_conflict', 'Project changed in another request. Reload it and try again.', 409);
+        }
+        throw error;
+    }
+}
+
+function blobEtag(result) {
+    return result?.blob?.etag ?? result?.etag ?? null;
 }
 
 async function readProject(owner, projectId, { configuration, blobStore }) {
@@ -376,6 +395,10 @@ async function readProject(owner, projectId, { configuration, blobStore }) {
         if (project?.version !== PROJECT_VERSION || project?.ownerSubject !== owner || project?.id !== projectId) {
             throw new Error('invalid_record');
         }
+        // Non-enumerable so it never leaks into JSON.stringify(project) (the
+        // write path) or a {...project} spread (updatedProject's patch
+        // merge) — only commitProjectPatch's own ifMatch read needs it.
+        Object.defineProperty(project, '_etag', { value: blobEtag(result), enumerable: false });
         return project;
     } catch {
         throw new CreatorProjectError('project_record_invalid', 'Stored Project data is invalid.', 503);
@@ -412,6 +435,14 @@ async function readAndCheckRevision(owner, id, expectedRevision, { configuration
 // cross-function race (e.g. a Storyboard autosave racing a workflow node's
 // completion) — it doesn't depend on both writers sharing the same queue,
 // only on both going through this same check-before-write.
+//
+// The revision comparison below is a cheap, common-case early exit; it is
+// NOT what makes this safe against two truly concurrent writers (including
+// two separate serverless instances), since both could still re-read the
+// same not-yet-changed revision before either has written. The `ifMatch`
+// passed to writeProject is what closes that gap: Blob's own conditional
+// write atomically rejects whichever writer's PUT loses the race, even if
+// both writers' application-level checks above raced past undetected.
 async function commitProjectPatch(owner, id, project, patch, { configuration, blobStore, now }) {
     if (patch == null) return projectForClient(project);
     const current = await readProject(owner, id, { configuration, blobStore });
@@ -419,7 +450,7 @@ async function commitProjectPatch(owner, id, project, patch, { configuration, bl
         throw new CreatorProjectError('project_conflict', 'Project changed in another request. Reload it and try again.', 409);
     }
     const next = updatedProject(project, patch, now);
-    await writeProject(next, { configuration, blobStore, allowOverwrite: true });
+    await writeProject(next, { configuration, blobStore, allowOverwrite: true, ifMatch: current._etag });
     return projectForClient(next);
 }
 
@@ -622,18 +653,28 @@ export async function mutateCreatorProject(user, projectId, mutator, {
 }
 
 export function creatorProjectStoreForTests(records = new Map(), { now = Date.now() } = {}) {
+    let etagCounter = 0;
     return {
         records,
         async put(pathname, body, options = {}) {
-            if (options.allowOverwrite === false && records.has(pathname)) throw new Error('blob_exists');
+            const existing = records.get(pathname);
+            if (options.allowOverwrite === false && existing) throw new Error('blob_exists');
+            // Mirrors Vercel Blob's real ifMatch semantics: reject atomically
+            // if the blob's current ETag no longer matches what the caller
+            // last observed, rather than silently overwriting it.
+            if (options.ifMatch != null && (!existing || existing.etag !== options.ifMatch)) {
+                throw new BlobPreconditionFailedError();
+            }
             const bytes = Buffer.from(typeof body === 'string' ? body : body instanceof Uint8Array ? body : String(body));
-            records.set(pathname, { pathname, bytes, uploadedAt: new Date(now), url: `https://private.test/${pathname}` });
-            return { pathname, url: `https://private.test/${pathname}` };
+            etagCounter += 1;
+            const etag = `test-etag-${etagCounter}`;
+            records.set(pathname, { pathname, bytes, uploadedAt: new Date(now), url: `https://private.test/${pathname}`, etag });
+            return { pathname, url: `https://private.test/${pathname}`, etag };
         },
         async get(pathname) {
             const record = records.get(pathname);
             if (!record) return null;
-            return { stream: new Blob([record.bytes]).stream() };
+            return { stream: new Blob([record.bytes]).stream(), blob: { etag: record.etag } };
         },
         async list({ prefix = '', limit = 100 } = {}) {
             return { blobs: [...records.values()].filter((item) => item.pathname.startsWith(prefix)).slice(0, limit) };
