@@ -49,11 +49,29 @@ export const DEFAULT_BRAIN_MODELS = Object.freeze({
     nvidia: 'nvidia/nemotron-3.5-lightning-30b-a3b',
 });
 
+function muapiProductionMode(env) {
+    return normalizedSecret(env.MUAPI_KEY_MODE).toLowerCase() === 'production';
+}
+
+function muapiPaidGenerationAllowed(env) {
+    return normalizedSecret(env.MUAPI_ALLOW_PAID_GENERATION).toLowerCase() === 'true';
+}
+
+// Agent chat turns are billed through the same MuAPI predictions endpoint as
+// paid media, so borrowing the shared Production key requires the same
+// explicit MUAPI_ALLOW_PAID_GENERATION opt-in as image/video and agent
+// delegation. A dedicated MUAPI_AGENT_API_KEY is itself an explicit decision.
 function muapiAgentKeyVariable(env) {
     if (isConfigured(env.MUAPI_AGENT_API_KEY)) return 'MUAPI_AGENT_API_KEY';
-    return normalizedSecret(env.MUAPI_KEY_MODE).toLowerCase() === 'production'
-        ? 'MUAPI_PRODUCTION_API_KEY'
-        : 'MUAPI_API_KEY';
+    if (!muapiProductionMode(env)) return 'MUAPI_API_KEY';
+    return muapiPaidGenerationAllowed(env) ? 'MUAPI_PRODUCTION_API_KEY' : null;
+}
+
+// 'paid' = billed per request; 'sandbox' = MuAPI zero-cost mock path;
+// 'low-cost' = free tier or low per-token pricing, depending on the account plan.
+function costTierFor(provider, env) {
+    if (provider !== 'muapi-agent') return 'low-cost';
+    return isConfigured(env.MUAPI_AGENT_API_KEY) || muapiProductionMode(env) ? 'paid' : 'sandbox';
 }
 
 const PROVIDER_DEFINITIONS = Object.freeze({
@@ -158,7 +176,15 @@ function modelFor(provider, env) {
 }
 
 function providerKey(provider, env) {
-    return normalizedSecret(env[keyVariableFor(provider, env)]);
+    const variable = keyVariableFor(provider, env);
+    return variable ? normalizedSecret(env[variable]) : '';
+}
+
+function missingKeyMessage(provider, env) {
+    if (provider === 'muapi-agent' && keyVariableFor(provider, env) === null) {
+        return 'MuAPI Agent would use the paid Production key. Set MUAPI_ALLOW_PAID_GENERATION=true or a dedicated MUAPI_AGENT_API_KEY.';
+    }
+    return `${PROVIDER_DEFINITIONS[provider].label} is not configured.`;
 }
 
 function parseSensitivityProviders(env, sensitivity) {
@@ -214,7 +240,7 @@ export function brainProviderStatuses(env = process.env) {
     const confidentialProviders = parseSensitivityProviders(env, 'CLIENT_CONFIDENTIAL');
     return BRAIN_PROVIDER_IDS.map((provider) => {
         const definition = PROVIDER_DEFINITIONS[provider];
-        const configured = isConfigured(env[keyVariableFor(provider, env)]);
+        const configured = isConfigured(providerKey(provider, env));
         return {
             id: provider,
             label: definition.label,
@@ -227,6 +253,7 @@ export function brainProviderStatuses(env = process.env) {
             selected: configuration.selectedProvider === provider,
             inFallbackOrder: configuration.fallbackOrder.includes(provider),
             model: modelFor(provider, env),
+            costTier: costTierFor(provider, env),
             sensitivityEligibility: {
                 public: true,
                 normal: true,
@@ -252,6 +279,7 @@ export function brainRouterStatus(env = process.env) {
         productionReady: false,
         selectedProvider: configuration.selectedProvider,
         model: selected?.model || null,
+        costTier: selected?.costTier || null,
         fallbackEnabled: configuration.automaticFallback,
         fallbackOrder: configuration.fallbackOrder,
         maxAttempts: configuration.maxAttempts,
@@ -906,7 +934,7 @@ export async function reasonWithBrain(request, {
         if (!key) {
             throw new BrainRouterError(
                 'provider_configuration_missing',
-                `${PROVIDER_DEFINITIONS[provider].label} is not configured.`,
+                missingKeyMessage(provider, env),
                 503,
                 { provider, attemptedProviders },
             );

@@ -188,6 +188,7 @@ test('MuAPI Agent honours the configured slug, key mode, and structured output',
             BRAIN_PROVIDER: 'muapi-agent',
             BRAIN_ENABLE_AUTOMATIC_FALLBACK: 'false',
             MUAPI_KEY_MODE: 'production',
+            MUAPI_ALLOW_PAID_GENERATION: 'true',
             MUAPI_PRODUCTION_API_KEY: 'muapi-production-secret',
             MUAPI_AGENT_SLUG: 'selena-director',
         },
@@ -306,6 +307,55 @@ test('Anthropic is no longer a recognised brain provider', () => {
     assert.equal(configuration.valid, false);
     assert.equal(configuration.errors.some((message) => message.includes('BRAIN_PROVIDER')), true);
     assert.equal(brainProviderStatuses(baseEnv).some((provider) => provider.id === 'anthropic'), false);
+});
+
+const productionMuapiEnv = {
+    ...baseEnv,
+    BRAIN_PROVIDER: 'muapi-agent',
+    BRAIN_FALLBACK_ORDER: 'muapi-agent,gemini',
+    MUAPI_KEY_MODE: 'production',
+    MUAPI_PRODUCTION_API_KEY: 'muapi-production-secret',
+};
+
+test('the MuAPI Agent brain never borrows the paid Production key without MUAPI_ALLOW_PAID_GENERATION=true', async () => {
+    let calls = 0;
+    await assert.rejects(
+        reasonWithBrain(request, {
+            env: productionMuapiEnv,
+            fetchImpl: async () => { calls += 1; return geminiSuccess(); },
+        }),
+        (error) => error.code === 'provider_configuration_missing' &&
+            error.provider === 'muapi-agent' &&
+            error.message.includes('MUAPI_ALLOW_PAID_GENERATION'),
+    );
+    assert.equal(calls, 0);
+    const status = brainProviderStatuses(productionMuapiEnv).find((provider) => provider.id === 'muapi-agent');
+    assert.equal(status.configured, false);
+    assert.equal(status.costTier, 'paid');
+});
+
+test('an explicit paid opt-in or a dedicated agent key enables the MuAPI Agent brain in Production', async () => {
+    for (const [env, expectedKey] of [
+        [{ ...productionMuapiEnv, MUAPI_ALLOW_PAID_GENERATION: 'true' }, 'muapi-production-secret'],
+        [{ ...productionMuapiEnv, MUAPI_AGENT_API_KEY: 'muapi-agent-dedicated' }, 'muapi-agent-dedicated'],
+    ]) {
+        const capture = { calls: [] };
+        const result = await reasonWithBrain(request, { env, fetchImpl: muapiAgentFetch('Agent plan', { capture }) });
+        assert.equal(result.provider, 'muapi-agent');
+        assert.equal(capture.calls[0].options.headers['x-api-key'], expectedKey);
+        assert.equal(brainRouterStatus(env).costTier, 'paid');
+    }
+});
+
+test('provider status reports an explicit cost tier for every brain provider', () => {
+    const tiers = Object.fromEntries(brainProviderStatuses(baseEnv).map((provider) => [provider.id, provider.costTier]));
+    assert.deepEqual(tiers, {
+        'muapi-agent': 'sandbox',
+        gemini: 'low-cost',
+        groq: 'low-cost',
+        openrouter: 'low-cost',
+        nvidia: 'low-cost',
+    });
 });
 
 test('NVIDIA is an optional provider: never the default and never in the default fallback order', () => {

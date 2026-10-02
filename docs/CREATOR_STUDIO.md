@@ -14,6 +14,15 @@ Creator Studio is the private creative operating-system shell. Selena is its pri
 | Development fallback | OpenRouter | `OPENROUTER_API_KEY` | `OPENROUTER_MODEL` |
 | Optional (opt-in only) | NVIDIA NIM | `NVIDIA_API_KEY` | `NVIDIA_BRAIN_MODEL` (legacy alias `NVIDIA_MODEL`) |
 
+### Brain cost policy
+
+Every brain provider reports a `costTier` in `GET /api/creator/providers`: `paid` (MuAPI Agent on a Production or dedicated key), `sandbox` (MuAPI Agent on the zero-cost mock key), or `low-cost` (Gemini, Groq, OpenRouter, NVIDIA; free tier or low per-token pricing, depending on the account plan). The router never picks a paid brain on its own:
+
+- Everyday reasoning should run on a `low-cost` provider when one is configured (`BRAIN_PROVIDER=gemini`).
+- The paid MuAPI Agent brain needs an explicit decision: `BRAIN_PROVIDER=muapi-agent` and either `MUAPI_ALLOW_PAID_GENERATION=true` or a dedicated `MUAPI_AGENT_API_KEY`.
+- Paid media generation, delegation to MuAPI Creator Team agents, and publishing stay behind Selena's per-action approval and `MUAPI_ALLOW_PAID_GENERATION`.
+- A premium model (for example a non-free OpenRouter model) needs an explicit `*_MODEL` setting. Defaults are always the free or low-cost model.
+
 ### Generation and publishing providers
 
 | Tool | Active provider | Required deployment variables |
@@ -216,6 +225,7 @@ The defaults are listed in `.env.example`:
 - `MUAPI_API_KEY` is selected only when `MUAPI_KEY_MODE=sandbox`.
 - `MUAPI_PRODUCTION_API_KEY` is selected only when `MUAPI_KEY_MODE=production`.
 - `MUAPI_ALLOW_PAID_GENERATION=false` is the fail-closed default. Production mode is rejected unless this variable is deliberately changed to `true`; changing the flag alone does not select the Production credential.
+- The Selena MuAPI Agent brain follows the same rule: MuAPI bills agent chat turns, so the brain uses `MUAPI_PRODUCTION_API_KEY` only when `MUAPI_ALLOW_PAID_GENERATION=true`. A dedicated `MUAPI_AGENT_API_KEY` counts as an explicit decision and is used in any mode. Otherwise the brain reports itself unconfigured and fails closed; it never reroutes to another provider.
 - `MUAPI_ALLOW_SOCIAL_PUBLISHING=false` independently locks paid external publishing without changing media-generation mode.
 - `MUAPI_SOCIAL_API_KEY` optionally isolates social access; if absent, the server falls back to `MUAPI_PRODUCTION_API_KEY`.
 - `MUAPI_TIKTOK_PUBLIC_PUBLISHING_APPROVED=false` forces TikTok `SELF_ONLY` even when a broader privacy value is submitted.
