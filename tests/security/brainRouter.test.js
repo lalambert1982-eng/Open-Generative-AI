@@ -188,6 +188,7 @@ test('MuAPI Agent honours the configured slug, key mode, and structured output',
             BRAIN_PROVIDER: 'muapi-agent',
             BRAIN_ENABLE_AUTOMATIC_FALLBACK: 'false',
             MUAPI_KEY_MODE: 'production',
+            MUAPI_ALLOW_PAID_GENERATION: 'true',
             MUAPI_PRODUCTION_API_KEY: 'muapi-production-secret',
             MUAPI_AGENT_SLUG: 'selena-director',
         },
@@ -306,6 +307,124 @@ test('Anthropic is no longer a recognised brain provider', () => {
     assert.equal(configuration.valid, false);
     assert.equal(configuration.errors.some((message) => message.includes('BRAIN_PROVIDER')), true);
     assert.equal(brainProviderStatuses(baseEnv).some((provider) => provider.id === 'anthropic'), false);
+});
+
+const productionMuapiEnv = {
+    ...baseEnv,
+    BRAIN_PROVIDER: 'muapi-agent',
+    BRAIN_FALLBACK_ORDER: 'muapi-agent,gemini',
+    MUAPI_KEY_MODE: 'production',
+    MUAPI_PRODUCTION_API_KEY: 'muapi-production-secret',
+};
+
+test('the MuAPI Agent brain never borrows the paid Production key without MUAPI_ALLOW_PAID_GENERATION=true', async () => {
+    let calls = 0;
+    await assert.rejects(
+        reasonWithBrain(request, {
+            env: productionMuapiEnv,
+            fetchImpl: async () => { calls += 1; return geminiSuccess(); },
+        }),
+        (error) => error.code === 'provider_configuration_missing' &&
+            error.provider === 'muapi-agent' &&
+            error.message.includes('MUAPI_ALLOW_PAID_GENERATION'),
+    );
+    assert.equal(calls, 0);
+    const status = brainProviderStatuses(productionMuapiEnv).find((provider) => provider.id === 'muapi-agent');
+    assert.equal(status.configured, false);
+    assert.equal(status.costTier, 'paid');
+});
+
+test('an explicit paid opt-in or a dedicated agent key enables the MuAPI Agent brain in Production', async () => {
+    for (const [env, expectedKey] of [
+        [{ ...productionMuapiEnv, MUAPI_ALLOW_PAID_GENERATION: 'true' }, 'muapi-production-secret'],
+        [{ ...productionMuapiEnv, MUAPI_AGENT_API_KEY: 'muapi-agent-dedicated' }, 'muapi-agent-dedicated'],
+    ]) {
+        const capture = { calls: [] };
+        const result = await reasonWithBrain(request, { env, fetchImpl: muapiAgentFetch('Agent plan', { capture }) });
+        assert.equal(result.provider, 'muapi-agent');
+        assert.equal(capture.calls[0].options.headers['x-api-key'], expectedKey);
+        assert.equal(brainRouterStatus(env).costTier, 'paid');
+    }
+});
+
+test('provider status reports an explicit cost tier for every brain provider', () => {
+    const tiers = Object.fromEntries(brainProviderStatuses(baseEnv).map((provider) => [provider.id, provider.costTier]));
+    assert.deepEqual(tiers, {
+        'muapi-agent': 'sandbox',
+        gemini: 'low-cost',
+        groq: 'low-cost',
+        openrouter: 'low-cost',
+        nvidia: 'low-cost',
+    });
+});
+
+test('NVIDIA is an optional provider: never the default and never in the default fallback order', () => {
+    const configuration = getBrainConfiguration({ NVIDIA_API_KEY: 'nvidia-test-provider-secret' });
+    assert.equal(configuration.selectedProvider, 'muapi-agent');
+    assert.equal(configuration.fallbackOrder.includes('nvidia'), false);
+    const nvidia = brainProviderStatuses({ NVIDIA_API_KEY: 'nvidia-test-provider-secret' })
+        .find((provider) => provider.id === 'nvidia');
+    assert.equal(nvidia.configured, true);
+    assert.equal(nvidia.selected, false);
+    assert.equal(nvidia.inFallbackOrder, false);
+});
+
+test('NVIDIA NIM uses the shared OpenAI-compatible adapter when explicitly selected', async () => {
+    let captured;
+    const result = await reasonWithBrain(request, {
+        env: {
+            ...baseEnv,
+            BRAIN_PROVIDER: 'nvidia',
+            BRAIN_ENABLE_AUTOMATIC_FALLBACK: 'false',
+            NVIDIA_API_KEY: 'nvidia-test-provider-secret',
+        },
+        fetchImpl: async (url, options) => {
+            captured = { url, options, body: JSON.parse(options.body) };
+            return compatibleSuccess('nvidia', 'NVIDIA plan');
+        },
+    });
+    assert.equal(captured.url, 'https://integrate.api.nvidia.com/v1/chat/completions');
+    assert.equal(captured.options.headers.authorization, 'Bearer nvidia-test-provider-secret');
+    assert.equal(captured.body.model, 'nvidia/nemotron-3.5-lightning-30b-a3b');
+    assert.equal(captured.options.body.includes('nvidia-test-provider-secret'), false);
+    assert.equal(result.provider, 'nvidia');
+    assert.equal(result.text, 'NVIDIA plan');
+});
+
+test('NVIDIA_BRAIN_MODEL takes precedence over the legacy NVIDIA_MODEL alias', async () => {
+    const models = [];
+    const env = {
+        ...baseEnv,
+        BRAIN_PROVIDER: 'nvidia',
+        BRAIN_ENABLE_AUTOMATIC_FALLBACK: 'false',
+        NVIDIA_API_KEY: 'nvidia-test-provider-secret',
+        NVIDIA_MODEL: 'nvidia/legacy-model',
+    };
+    const fetchImpl = async (_url, options) => {
+        models.push(JSON.parse(options.body).model);
+        return compatibleSuccess('nvidia');
+    };
+    await reasonWithBrain(request, { env, fetchImpl });
+    await reasonWithBrain(request, { env: { ...env, NVIDIA_BRAIN_MODEL: 'nvidia/preferred-model' }, fetchImpl });
+    assert.deepEqual(models, ['nvidia/legacy-model', 'nvidia/preferred-model']);
+});
+
+test('NVIDIA joins the fallback chain only when an operator lists it', async () => {
+    const urls = [];
+    const result = await reasonWithBrain(request, {
+        env: {
+            ...baseEnv,
+            BRAIN_FALLBACK_ORDER: 'gemini,nvidia',
+            NVIDIA_API_KEY: 'nvidia-test-provider-secret',
+        },
+        fetchImpl: async (url) => {
+            urls.push(url);
+            if (url.includes('generativelanguage')) return new Response('{"error":{"message":"quota"}}', { status: 429 });
+            return compatibleSuccess('nvidia');
+        },
+    });
+    assert.equal(result.provider, 'nvidia');
+    assert.equal(urls.length, 2);
 });
 
 test('a Gemini quota response falls back once to Groq', async () => {

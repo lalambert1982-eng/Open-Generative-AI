@@ -9,6 +9,7 @@ import {
 import {
     BRAIN_REASONING_TOOL_ID,
     ELEVENLABS_VOICE_TOOL_ID,
+    NVIDIA_IMAGE_TOOL_ID,
     OPENAI_IMAGE_TOOL_ID,
     RUNWAY_VIDEO_TOOL_ID,
 } from './creatorToolRegistry.js';
@@ -32,6 +33,11 @@ import {
     getMuapiGenerationJob,
     muapiProviderStatus,
 } from './muapiCreatorProvider.js';
+import {
+    createNvidiaImageGeneration,
+    nvidiaImageConfiguration,
+    nvidiaImageProviderStatus,
+} from './nvidiaCreatorProvider.js';
 import { checkRateLimit } from './rateLimit.js';
 import { CreatorProjectError, getCreatorProject } from './creatorProjectStore.js';
 import {
@@ -44,6 +50,8 @@ const DEFAULT_REQUEST_LIMIT = 30;
 const DEFAULT_STATUS_LIMIT = 120;
 const DEFAULT_WINDOW_MS = 60_000;
 const MAX_JSON_BODY_BYTES = 64 * 1024;
+// Image-edit requests carry a base64 reference image (up to 8 MiB raw).
+const MAX_NVIDIA_IMAGE_JSON_BODY_BYTES = 16 * 1024 * 1024;
 const MAX_PROVIDER_JSON_BYTES = 32 * 1024 * 1024;
 const MAX_BINARY_BYTES = 32 * 1024 * 1024;
 
@@ -146,14 +154,14 @@ export function authorizeCreatorRequest(request, {
     return { user: authentication.user };
 }
 
-async function parseCreatorJson(request, { env = process.env } = {}) {
+async function parseCreatorJson(request, { env = process.env, maxBytes = MAX_JSON_BODY_BYTES } = {}) {
     const declaredLength = Number(request.headers.get('content-length') || 0);
-    if (declaredLength > MAX_JSON_BODY_BYTES) {
+    if (declaredLength > maxBytes) {
         return { response: creatorJson({ error: 'Request body is too large.' }, 413) };
     }
 
     const raw = await request.text();
-    if (new TextEncoder().encode(raw).byteLength > MAX_JSON_BODY_BYTES) {
+    if (new TextEncoder().encode(raw).byteLength > maxBytes) {
         return { response: creatorJson({ error: 'Request body is too large.' }, 413) };
     }
 
@@ -337,6 +345,7 @@ function generationProviderStatuses(env) {
             tested: false,
             productionReady: false,
         },
+        nvidiaImageProviderStatus(env),
     ];
 }
 
@@ -532,6 +541,40 @@ export async function handleOpenAiImage(request, {
             'content-disposition': 'inline; filename="creator-studio-image.png"',
             'x-generation-provider': 'openai',
             'x-creator-tool-id': OPENAI_IMAGE_TOOL_ID,
+        }),
+    });
+}
+
+export async function handleNvidiaImage(request, {
+    env = process.env,
+    fetchImpl = fetch,
+} = {}) {
+    const auth = authorizeCreatorRequest(request, { env, action: 'nvidia-image' });
+    if (auth.response) return auth.response;
+    const configuration = nvidiaImageConfiguration(env);
+    if (!configuration.configured) {
+        return creatorJson({ error: 'NVIDIA Image Generation is not configured.', missing: configuration.missing }, 503);
+    }
+    const parsed = await parseCreatorJson(request, { env, maxBytes: MAX_NVIDIA_IMAGE_JSON_BODY_BYTES });
+    if (parsed.response) return parsed.response;
+
+    const result = await createNvidiaImageGeneration(parsed.value, { env, fetchImpl });
+    if (!result.ok) {
+        return creatorJson({
+            error: result.error,
+            ...(Array.isArray(result.missing) ? { missing: result.missing } : {}),
+            ...(result.detail ? { detail: result.detail } : {}),
+        }, result.status || 502);
+    }
+
+    return new Response(result.job.image, {
+        status: 200,
+        headers: creatorHeaders({
+            'content-type': result.job.contentType,
+            'content-disposition': 'inline; filename="creator-studio-nvidia-image.png"',
+            'x-generation-provider': 'nvidia',
+            'x-creator-tool-id': NVIDIA_IMAGE_TOOL_ID,
+            'x-generation-kind': result.job.kind,
         }),
     });
 }
