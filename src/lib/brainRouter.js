@@ -3,7 +3,14 @@ import { evaluateJsonSafety } from './contentSafety.js';
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const NVIDIA_API_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
 const MUAPI_API_BASE = 'https://api.muapi.ai';
+
+const OPENAI_COMPATIBLE_URLS = Object.freeze({
+    groq: GROQ_API_URL,
+    openrouter: OPENROUTER_API_URL,
+    nvidia: NVIDIA_API_URL,
+});
 
 const DEFAULT_TIMEOUT_MS = 45_000;
 const MUAPI_AGENT_DEFAULT_POLL_INTERVAL_MS = 2_000;
@@ -19,9 +26,11 @@ export const BRAIN_PROVIDER_IDS = Object.freeze([
     'gemini',
     'groq',
     'openrouter',
+    'nvidia',
 ]);
 
 export const DEFAULT_BRAIN_PROVIDER = 'muapi-agent';
+// NVIDIA is deliberately absent: it is opt-in via BRAIN_PROVIDER or BRAIN_FALLBACK_ORDER.
 export const DEFAULT_BRAIN_FALLBACK_ORDER = Object.freeze(['muapi-agent', 'gemini', 'groq', 'openrouter']);
 export const DEFAULT_MUAPI_AGENT_SLUG = 'selena';
 
@@ -37,13 +46,32 @@ export const DEFAULT_BRAIN_MODELS = Object.freeze({
     gemini: 'gemini-3.7-flash',
     groq: 'openai/gpt-oss-120b',
     openrouter: 'openrouter/free',
+    nvidia: 'nvidia/nemotron-3.5-lightning-30b-a3b',
 });
 
+function muapiProductionMode(env) {
+    return normalizedSecret(env.MUAPI_KEY_MODE).toLowerCase() === 'production';
+}
+
+function muapiPaidGenerationAllowed(env) {
+    return normalizedSecret(env.MUAPI_ALLOW_PAID_GENERATION).toLowerCase() === 'true';
+}
+
+// Agent chat turns are billed through the same MuAPI predictions endpoint as
+// paid media, so borrowing the shared Production key requires the same
+// explicit MUAPI_ALLOW_PAID_GENERATION opt-in as image/video and agent
+// delegation. A dedicated MUAPI_AGENT_API_KEY is itself an explicit decision.
 function muapiAgentKeyVariable(env) {
     if (isConfigured(env.MUAPI_AGENT_API_KEY)) return 'MUAPI_AGENT_API_KEY';
-    return normalizedSecret(env.MUAPI_KEY_MODE).toLowerCase() === 'production'
-        ? 'MUAPI_PRODUCTION_API_KEY'
-        : 'MUAPI_API_KEY';
+    if (!muapiProductionMode(env)) return 'MUAPI_API_KEY';
+    return muapiPaidGenerationAllowed(env) ? 'MUAPI_PRODUCTION_API_KEY' : null;
+}
+
+// 'paid' = billed per request; 'sandbox' = MuAPI zero-cost mock path;
+// 'low-cost' = free tier or low per-token pricing, depending on the account plan.
+function costTierFor(provider, env) {
+    if (provider !== 'muapi-agent') return 'low-cost';
+    return isConfigured(env.MUAPI_AGENT_API_KEY) || muapiProductionMode(env) ? 'paid' : 'sandbox';
 }
 
 const PROVIDER_DEFINITIONS = Object.freeze({
@@ -70,6 +98,14 @@ const PROVIDER_DEFINITIONS = Object.freeze({
         label: 'OpenRouter',
         keyVariable: 'OPENROUTER_API_KEY',
         modelVariable: 'OPENROUTER_MODEL',
+    }),
+    nvidia: Object.freeze({
+        id: 'nvidia',
+        label: 'NVIDIA NIM',
+        keyVariable: 'NVIDIA_API_KEY',
+        // Distinct from any NVIDIA media-model variable; NVIDIA_MODEL is the legacy alias.
+        modelVariable: 'NVIDIA_BRAIN_MODEL',
+        legacyModelVariable: 'NVIDIA_MODEL',
     }),
 });
 
@@ -134,11 +170,21 @@ function strictAttempts(value) {
 
 function modelFor(provider, env) {
     const definition = PROVIDER_DEFINITIONS[provider];
-    return normalizedSecret(env[definition.modelVariable]) || DEFAULT_BRAIN_MODELS[provider];
+    return normalizedSecret(env[definition.modelVariable]) ||
+        (definition.legacyModelVariable ? normalizedSecret(env[definition.legacyModelVariable]) : '') ||
+        DEFAULT_BRAIN_MODELS[provider];
 }
 
 function providerKey(provider, env) {
-    return normalizedSecret(env[keyVariableFor(provider, env)]);
+    const variable = keyVariableFor(provider, env);
+    return variable ? normalizedSecret(env[variable]) : '';
+}
+
+function missingKeyMessage(provider, env) {
+    if (provider === 'muapi-agent' && keyVariableFor(provider, env) === null) {
+        return 'MuAPI Agent would use the paid Production key. Set MUAPI_ALLOW_PAID_GENERATION=true or a dedicated MUAPI_AGENT_API_KEY.';
+    }
+    return `${PROVIDER_DEFINITIONS[provider].label} is not configured.`;
 }
 
 function parseSensitivityProviders(env, sensitivity) {
@@ -194,7 +240,7 @@ export function brainProviderStatuses(env = process.env) {
     const confidentialProviders = parseSensitivityProviders(env, 'CLIENT_CONFIDENTIAL');
     return BRAIN_PROVIDER_IDS.map((provider) => {
         const definition = PROVIDER_DEFINITIONS[provider];
-        const configured = isConfigured(env[keyVariableFor(provider, env)]);
+        const configured = isConfigured(providerKey(provider, env));
         return {
             id: provider,
             label: definition.label,
@@ -207,6 +253,7 @@ export function brainProviderStatuses(env = process.env) {
             selected: configuration.selectedProvider === provider,
             inFallbackOrder: configuration.fallbackOrder.includes(provider),
             model: modelFor(provider, env),
+            costTier: costTierFor(provider, env),
             sensitivityEligibility: {
                 public: true,
                 normal: true,
@@ -232,6 +279,7 @@ export function brainRouterStatus(env = process.env) {
         productionReady: false,
         selectedProvider: configuration.selectedProvider,
         model: selected?.model || null,
+        costTier: selected?.costTier || null,
         fallbackEnabled: configuration.automaticFallback,
         fallbackOrder: configuration.fallbackOrder,
         maxAttempts: configuration.maxAttempts,
@@ -625,7 +673,7 @@ function openAiResponseFormat(request) {
 
 async function callOpenAiCompatible(provider, request, { env, fetchImpl, model, key }) {
     const prompts = brainPrompts(request, env);
-    const url = provider === 'groq' ? GROQ_API_URL : OPENROUTER_API_URL;
+    const url = OPENAI_COMPATIBLE_URLS[provider];
     const body = {
         model,
         messages: [
@@ -794,6 +842,7 @@ const PROVIDER_CALLERS = Object.freeze({
     gemini: callGemini,
     groq: (request, options) => callOpenAiCompatible('groq', request, options),
     openrouter: (request, options) => callOpenAiCompatible('openrouter', request, options),
+    nvidia: (request, options) => callOpenAiCompatible('nvidia', request, options),
 });
 
 export class BrainRouterError extends Error {
@@ -868,7 +917,11 @@ export async function reasonWithBrain(request, {
     const eligibleProviders = parseSensitivityProviders(env, normalized.sensitivity);
     const order = [];
     for (const provider of configuredOrder) {
-        if (eligibleProviders.includes(provider) && !order.includes(provider)) order.push(provider);
+        if (!eligibleProviders.includes(provider) || order.includes(provider)) continue;
+        // A failure on a chosen provider may fall back to another one, but never
+        // onto a paid one the operator did not select (docs: "never picks a paid brain on its own").
+        if (provider !== selectedProvider && costTierFor(provider, env) === 'paid') continue;
+        order.push(provider);
     }
     if (order.length === 0) {
         throw new BrainRouterError(
@@ -885,7 +938,7 @@ export async function reasonWithBrain(request, {
         if (!key) {
             throw new BrainRouterError(
                 'provider_configuration_missing',
-                `${PROVIDER_DEFINITIONS[provider].label} is not configured.`,
+                missingKeyMessage(provider, env),
                 503,
                 { provider, attemptedProviders },
             );

@@ -7,6 +7,7 @@ import {
     handleMuapiImage,
     handleMuapiStatus,
     handleMuapiVideo,
+    handleNvidiaImage,
     handleOpenAiImage,
 } from '../../src/lib/creatorProviderGateway.js';
 import { createCreatorSession, creatorCookieSettings } from '../../src/lib/creatorAuth.js';
@@ -16,6 +17,7 @@ import {
     HEYGEN_AVATAR_VIDEO_TOOL_ID,
     MUAPI_IMAGE_TOOL_ID,
     MUAPI_VIDEO_TOOL_ID,
+    NVIDIA_IMAGE_TOOL_ID,
 } from '../../src/lib/creatorToolRegistry.js';
 import { resetRateLimitStore } from '../../src/lib/rateLimit.js';
 
@@ -43,6 +45,25 @@ function creatorRequest(path, body, sessionValue = session, extraHeaders = {}) {
         body: body === undefined ? undefined : JSON.stringify(body),
     });
 }
+
+test('export availability requires the render flag and both Project and Asset storage without exposing tokens', async () => {
+    const projectToken = 'fixture-private-project-token-long-enough';
+    const assetToken = 'fixture-public-asset-token-long-enough';
+    for (const [settings, expected] of [
+        [{}, { enabled: false, configured: false }],
+        [{ CREATOR_RENDER_ENABLED: 'true' }, { enabled: true, configured: false }],
+        [{ CREATOR_RENDER_ENABLED: 'true', BLOB_READ_WRITE_TOKEN: projectToken }, { enabled: true, configured: false }],
+        [{ CREATOR_RENDER_ENABLED: 'true', BLOB_READ_WRITE_TOKEN: projectToken, CREATOR_ASSET_BLOB_READ_WRITE_TOKEN: assetToken }, { enabled: true, configured: true }],
+    ]) {
+        resetRateLimitStore();
+        const response = await handleCreatorProviders(creatorRequest('providers'), { env: { ...baseEnv, ...settings } });
+        assert.equal(response.status, 200);
+        const text = await response.text();
+        assert.deepEqual(JSON.parse(text).rendering, expected);
+        assert.equal(text.includes(projectToken), false);
+        assert.equal(text.includes(assetToken), false);
+    }
+});
 
 test('creator gateway rejects missing, tampered, or weak session authentication', async () => {
     resetRateLimitStore();
@@ -176,11 +197,13 @@ test('provider status reports readiness without disclosing provider credentials'
         HEYGEN_VOICE_ID: 'heygen-voice-id',
         RUNWAY_API_KEY: 'runway-provider-secret',
         MUAPI_API_KEY: 'muapi-sandbox-provider-secret',
+        NVIDIA_API_KEY: 'nvidia-provider-secret',
     };
     const response = await handleCreatorProviders(creatorRequest('providers'), {
         env: {
             ...baseEnv,
             ...secrets,
+            NVIDIA_IMAGE_ENABLED: 'true',
             MUAPI_KEY_MODE: 'sandbox',
             MUAPI_ALLOW_PAID_GENERATION: 'false',
         },
@@ -189,12 +212,13 @@ test('provider status reports readiness without disclosing provider credentials'
     assert.equal(response.status, 200);
     const text = await response.text();
     const body = JSON.parse(text);
-    assert.deepEqual(body.providers.map((provider) => provider.configured), [true, true, true, true]);
+    assert.deepEqual(body.providers.map((provider) => provider.configured), [true, true, true, true, true]);
     assert.deepEqual(body.providers.map((provider) => provider.toolId), [
         BRAIN_REASONING_TOOL_ID,
         undefined,
         ELEVENLABS_VOICE_TOOL_ID,
         HEYGEN_AVATAR_VIDEO_TOOL_ID,
+        NVIDIA_IMAGE_TOOL_ID,
     ]);
     assert.deepEqual(body.providers[1].toolIds, [MUAPI_IMAGE_TOOL_ID, MUAPI_VIDEO_TOOL_ID]);
     assert.deepEqual(body.brainProviders.map((provider) => provider.id), [
@@ -202,11 +226,13 @@ test('provider status reports readiness without disclosing provider credentials'
         'gemini',
         'groq',
         'openrouter',
+        'nvidia',
     ]);
     assert.deepEqual(body.generationProviders.map((provider) => provider.id), [
         'muapi',
         'elevenlabs',
         'heygen',
+        'nvidia-image',
     ]);
     assert.deepEqual(body.deferredGenerationProviders.map((provider) => provider.id), ['openai', 'runway']);
     assert.equal(body.brain.selectedProvider, 'muapi-agent');
@@ -394,4 +420,175 @@ test('creator provider polling/status endpoint is rate limited by GitHub identit
     const env = { ...baseEnv, CREATOR_STUDIO_STATUS_RATE_LIMIT: '1' };
     assert.equal((await handleCreatorProviders(creatorRequest('providers'), { env })).status, 200);
     assert.equal((await handleCreatorProviders(creatorRequest('providers'), { env })).status, 429);
+});
+
+test('NVIDIA image proxy returns image bytes without exposing the API key', async () => {
+    resetRateLimitStore();
+    const providerKey = 'nvidia-provider-secret';
+    const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    let captured;
+    const response = await handleNvidiaImage(
+        creatorRequest('nvidia-image', { prompt: 'A dramatic track stadium at sunset.', aspectRatio: '16:9' }),
+        {
+            env: { ...baseEnv, NVIDIA_API_KEY: providerKey, NVIDIA_IMAGE_ENABLED: 'true' },
+            fetchImpl: async (url, options) => {
+                captured = { url, options };
+                return new Response(JSON.stringify({
+                    artifacts: [{ base64: Buffer.from(png).toString('base64') }],
+                }), {
+                    status: 200,
+                    headers: { 'content-type': 'application/json' },
+                });
+            },
+        },
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'image/png');
+    assert.equal(response.headers.get('x-creator-tool-id'), NVIDIA_IMAGE_TOOL_ID);
+    assert.equal(response.headers.get('x-generation-kind'), 'generate');
+    assert.equal(captured.url, 'https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.2-klein-4b');
+    assert.equal(captured.options.headers.authorization, `Bearer ${providerKey}`);
+    assert.equal(captured.options.headers.cookie, undefined);
+    assert.deepEqual(new Uint8Array(await response.arrayBuffer()), png);
+});
+
+test('NVIDIA image proxy rejects unauthenticated and cross-origin requests before provider access', async () => {
+    resetRateLimitStore();
+    let called = false;
+    const unauthenticated = await handleNvidiaImage(
+        creatorRequest('nvidia-image', { prompt: 'x' }, ''),
+        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret', NVIDIA_IMAGE_ENABLED: 'true' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
+    );
+    assert.equal(unauthenticated.status, 401);
+
+    const crossOrigin = await handleNvidiaImage(
+        creatorRequest('nvidia-image', { prompt: 'x' }, session, { origin: 'https://attacker.test', 'sec-fetch-site': 'cross-site' }),
+        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret', NVIDIA_IMAGE_ENABLED: 'true' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
+    );
+    assert.equal(crossOrigin.status, 403);
+    assert.equal(called, false);
+});
+
+test('NVIDIA image proxy reports missing configuration without calling the provider', async () => {
+    resetRateLimitStore();
+    let called = false;
+    const response = await handleNvidiaImage(
+        creatorRequest('nvidia-image', { prompt: 'x' }),
+        { env: baseEnv, fetchImpl: async () => { called = true; return new Response('{}'); } },
+    );
+    const body = await response.json();
+    assert.equal(response.status, 503);
+    assert.deepEqual(body.missing, ['NVIDIA_API_KEY', 'NVIDIA_IMAGE_ENABLED=true']);
+    assert.equal(called, false);
+});
+
+test('NVIDIA image edit requests carry a realistic reference image through the gateway without being rejected on size', async () => {
+    resetRateLimitStore();
+    const providerKey = 'nvidia-provider-secret';
+    const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    // ~1.5 MB decoded once base64 is unwound -- far larger than the old
+    // 64 KiB Creator JSON body ceiling, but well inside the NVIDIA image
+    // provider's own 8 MiB reference-image cap and the gateway's dedicated
+    // MAX_NVIDIA_IMAGE_JSON_BODY_BYTES ceiling.
+    const referenceImage = `data:image/png;base64,${'A'.repeat(2 * 1024 * 1024)}`;
+    let captured;
+    const response = await handleNvidiaImage(
+        creatorRequest('nvidia-image', { prompt: 'Add dramatic rim lighting.', referenceImage }),
+        {
+            env: { ...baseEnv, NVIDIA_API_KEY: providerKey, NVIDIA_IMAGE_ENABLED: 'true' },
+            fetchImpl: async (url, options) => {
+                captured = { url, options };
+                return new Response(JSON.stringify({
+                    artifacts: [{ base64: Buffer.from(png).toString('base64') }],
+                }), { status: 200, headers: { 'content-type': 'application/json' } });
+            },
+        },
+    );
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('x-generation-kind'), 'edit');
+    assert.equal(JSON.parse(captured.options.body).mode, 'Image Editing');
+});
+
+test('NVIDIA image edit requests still reject unauthenticated and cross-origin access before the body is read', async () => {
+    resetRateLimitStore();
+    let called = false;
+    const referenceImage = `data:image/png;base64,${'A'.repeat(2 * 1024 * 1024)}`;
+    const unauthenticated = await handleNvidiaImage(
+        creatorRequest('nvidia-image', { prompt: 'Edit it.', referenceImage }, ''),
+        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret', NVIDIA_IMAGE_ENABLED: 'true' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
+    );
+    assert.equal(unauthenticated.status, 401);
+
+    const crossOrigin = await handleNvidiaImage(
+        creatorRequest('nvidia-image', { prompt: 'Edit it.', referenceImage }, session, { origin: 'https://attacker.test', 'sec-fetch-site': 'cross-site' }),
+        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret', NVIDIA_IMAGE_ENABLED: 'true' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
+    );
+    assert.equal(crossOrigin.status, 403);
+    assert.equal(called, false);
+});
+
+test('NVIDIA image edit requests remain subject to the Creator Studio per-identity rate limit', async () => {
+    resetRateLimitStore();
+    const referenceImage = `data:image/png;base64,${'A'.repeat(1024)}`;
+    const env = { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret', NVIDIA_IMAGE_ENABLED: 'true', CREATOR_STUDIO_RATE_LIMIT: '1' };
+    const fetchImpl = async () => new Response(JSON.stringify({
+        artifacts: [{ base64: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64') }],
+    }), { status: 200 });
+    const first = await handleNvidiaImage(creatorRequest('nvidia-image', { prompt: 'x', referenceImage }), { env, fetchImpl });
+    assert.equal(first.status, 200);
+    const second = await handleNvidiaImage(creatorRequest('nvidia-image', { prompt: 'x', referenceImage }), { env, fetchImpl });
+    assert.equal(second.status, 429);
+});
+
+test('a reference image over the provider size cap is rejected without calling NVIDIA', async () => {
+    resetRateLimitStore();
+    let called = false;
+    // Decodes to ~9 MB, over the provider's 8 MiB MAX_REFERENCE_IMAGE_BYTES
+    // cap, but still comfortably under the gateway's own 16 MiB body ceiling
+    // -- this exercises the provider's own size validation, not the
+    // gateway's outer body-size guard.
+    const referenceImage = `data:image/png;base64,${'A'.repeat(12_000_000)}`;
+    const response = await handleNvidiaImage(
+        creatorRequest('nvidia-image', { prompt: 'Edit it.', referenceImage }),
+        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret', NVIDIA_IMAGE_ENABLED: 'true' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
+    );
+    const body = await response.json();
+    assert.equal(response.status, 400);
+    assert.equal(body.error, 'Reference image is too large.');
+    assert.equal(called, false);
+});
+
+test('a request body over the gateway NVIDIA image ceiling is rejected before parsing', async () => {
+    resetRateLimitStore();
+    let called = false;
+    // Comfortably over MAX_NVIDIA_IMAGE_JSON_BODY_BYTES (16 MiB) so the
+    // gateway's own outer body-size guard rejects it before the request is
+    // even parsed as JSON, independent of the provider's own image cap.
+    const referenceImage = `data:image/png;base64,${'A'.repeat(20_000_000)}`;
+    const response = await handleNvidiaImage(
+        creatorRequest('nvidia-image', { prompt: 'Edit it.', referenceImage }),
+        { env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret', NVIDIA_IMAGE_ENABLED: 'true' }, fetchImpl: async () => { called = true; return new Response('{}'); } },
+    );
+    assert.equal(response.status, 413);
+    assert.equal(called, false);
+});
+
+test('provider status lists NVIDIA Image Generation distinct from the NVIDIA-backed Selena Brain', async () => {
+    resetRateLimitStore();
+    const response = await handleCreatorProviders(creatorRequest('providers'), {
+        env: { ...baseEnv, NVIDIA_API_KEY: 'nvidia-provider-secret', NVIDIA_IMAGE_ENABLED: 'true', BRAIN_PROVIDER: 'nvidia' },
+    });
+    const body = await response.json();
+    const nvidiaImage = body.providers.find((provider) => provider.id === 'nvidia-image');
+    assert.equal(nvidiaImage.configured, true);
+    assert.equal(nvidiaImage.toolId, NVIDIA_IMAGE_TOOL_ID);
+    assert.equal(nvidiaImage.category, 'generation');
+    assert.equal(nvidiaImage.productionReady, false);
+    assert.deepEqual(nvidiaImage.capabilityStatus, {
+        generate: 'implemented',
+        edit: 'experimental-requires-live-verification',
+    });
+    assert.notEqual(nvidiaImage.label, body.brain.label);
+    assert.equal(JSON.stringify(body).includes('nvidia-provider-secret'), false);
 });

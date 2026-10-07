@@ -9,6 +9,63 @@ export const TRANSITIONS = Object.freeze([
 
 export const ASPECT_RATIOS = Object.freeze(["16:9", "9:16", "1:1"]);
 
+export function storyboardRenderIssue({ projectId, scenes = [], configured, busy }) {
+  if (!projectId) return "Open or create a Project to export video.";
+  if (!configured) return "Video export is unavailable in this environment.";
+  if (busy || scenes.some((scene) => scene.status?.startsWith("generating"))) {
+    return "Wait for scene generation to finish before exporting.";
+  }
+  if (!scenes.length || scenes.some((scene) => !scene.imageUrl && !scene.videoUrl)) {
+    return "Add an image or video to every scene before exporting.";
+  }
+  return "";
+}
+
+// The lock is acquired synchronously, before saving or sending a request, so
+// two clicks in one React render cannot create duplicate exports.
+export function createStoryboardRenderer() {
+  let inFlight = false;
+  return (options) => {
+    if (inFlight) return null;
+    inFlight = true;
+    return renderSavedStoryboard(options).finally(() => { inFlight = false; });
+  };
+}
+
+async function renderSavedStoryboard({
+  projectId, storyboard, saveStoryboard, request,
+  onProjectChange = () => {}, onStatus = () => {}, isCurrent = () => true,
+}) {
+  try {
+    onStatus("saving");
+    const saved = await saveStoryboard(storyboard);
+    if (!isCurrent()) return null;
+    if (!saved || saved.id !== projectId || !Number.isInteger(saved.revision)) {
+      throw new Error("The scenes could not be saved. Export was not started.");
+    }
+    onStatus("rendering");
+    const response = await request(`projects/${encodeURIComponent(projectId)}/render`, {
+      method: "POST", body: { expectedRevision: saved.revision },
+    });
+    const data = await response.json().catch(() => null);
+    if (!isCurrent()) return null;
+    // Failed renders also return the updated Project, containing their history.
+    if (data?.project?.id === projectId) onProjectChange(data.project);
+    if (!response.ok || data?.render?.status !== "complete") {
+      throw new Error(data?.render?.error || data?.error || "The video could not be rendered. Check Project history before trying again.");
+    }
+    const asset = data.project?.id === projectId && Array.isArray(data.project.assets)
+      ? data.project.assets.find((item) => item.id === data.render.outputAssetId && item.type === "video" && item.url?.startsWith("https://"))
+      : null;
+    if (!asset) throw new Error("The rendered video output is unavailable. Check Project Assets before trying again.");
+    onStatus("complete");
+    return { render: data.render, asset };
+  } catch (error) {
+    if (isCurrent()) onStatus("failed");
+    throw error;
+  }
+}
+
 function sceneId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   return `scene-${Date.now()}-${Math.random().toString(16).slice(2)}`;
