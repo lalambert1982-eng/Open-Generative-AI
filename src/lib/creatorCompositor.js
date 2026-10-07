@@ -30,6 +30,11 @@ export class CompositorError extends Error {
     }
 }
 
+// Bounds on user-controlled timeline lengths; a looped still image or a huge
+// duration would otherwise only be stopped by the render time budget.
+export const MAX_CLIP_SECONDS = 300;
+export const MAX_TOTAL_SECONDS = 900;
+
 const DEFAULT_FPS = 30;
 const MUSIC_DUCK_VOLUME = 0.25;
 const MAX_CAPTIONS_RENDERED = 200;
@@ -124,13 +129,20 @@ export function buildRenderPlan(timeline) {
         height: evenDimension(timeline?.resolution?.height, 1080),
     };
 
+    const totalDuration = resolvedClips.reduce((sum, clip) => sum + clip.duration, 0);
+    if (resolvedClips.some((clip) => clip.duration > MAX_CLIP_SECONDS)) {
+        throw new CompositorError('clip_too_long', `A clip can be at most ${MAX_CLIP_SECONDS} seconds long.`);
+    }
+    if (totalDuration > MAX_TOTAL_SECONDS) {
+        throw new CompositorError('timeline_too_long', `A timeline can be at most ${MAX_TOTAL_SECONDS} seconds long.`);
+    }
     return Object.freeze({
         clips: Object.freeze(resolvedClips),
         captions: Object.freeze(captions),
         voiceTrack,
         musicTrack,
         resolution,
-        totalDuration: resolvedClips.reduce((sum, clip) => sum + clip.duration, 0),
+        totalDuration,
     });
 }
 

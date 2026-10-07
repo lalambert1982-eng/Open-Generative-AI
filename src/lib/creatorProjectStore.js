@@ -24,6 +24,8 @@ const DEFAULT_RENDER_BUDGET_MS = 4 * 60 * 1000;
 const RENDER_SOURCE_TIMEOUT_MS = 60 * 1000;
 const RENDER_COMMIT_ATTEMPTS = 3;
 const MAX_RENDER_SOURCE_BYTES = 250 * 1024 * 1024;
+// All sources of one render together must fit the function's temp space and memory.
+const MAX_RENDER_TOTAL_BYTES = 500 * 1024 * 1024;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,139}$/;
 const ASSET_TYPES = new Set(['image', 'video', 'voice', 'audio', 'music', 'avatar', 'graphic', 'upload']);
@@ -653,7 +655,7 @@ function remainingMs(deadline) {
     return remaining;
 }
 
-async function downloadRenderSource(url, destPath, { env, fetchImpl, deadline }) {
+async function downloadRenderSource(url, destPath, { env, fetchImpl, deadline, budget }) {
     const safeUrl = safeCreatorAssetUrl(url, { env });
     let response;
     try {
@@ -672,6 +674,12 @@ async function downloadRenderSource(url, destPath, { env, fetchImpl, deadline })
     if (Number(response.headers?.get?.('content-length') || 0) > MAX_RENDER_SOURCE_BYTES) throw tooLarge;
     const buffer = Buffer.from(await response.arrayBuffer());
     if (buffer.length > MAX_RENDER_SOURCE_BYTES) throw tooLarge;
+    if (budget) {
+        budget.bytes += buffer.length;
+        if (budget.bytes > MAX_RENDER_TOTAL_BYTES) {
+            throw new CreatorProjectError('render_sources_too_large', 'The media sources for this render are too large in total.', 413);
+        }
+    }
     await writeFile(destPath, buffer);
 }
 
@@ -713,22 +721,23 @@ async function produceRender(project, renderId, { env, fetchImpl, execFileImpl, 
         throw new CreatorProjectError('asset_limit', `A Project supports at most ${MAX_ASSETS} Assets.`, 409);
     }
     const tmpDir = await mkdtemp(join(tmpdir(), 'creator-render-'));
+    const budget = { bytes: 0 };
     try {
         const clipFilePaths = [];
         for (const [index, clip] of plan.clips.entries()) {
             const destPath = join(tmpDir, `clip-${index}.${clip.sourceType === 'video' ? 'mp4' : 'img'}`);
-            await downloadRenderSource(clip.sourceUrl, destPath, { env, fetchImpl, deadline });
+            await downloadRenderSource(clip.sourceUrl, destPath, { env, fetchImpl, deadline, budget });
             clipFilePaths.push(destPath);
         }
         let voiceFilePath = null;
         if (plan.voiceTrack) {
             voiceFilePath = join(tmpDir, 'voice.audio');
-            await downloadRenderSource(plan.voiceTrack.url, voiceFilePath, { env, fetchImpl, deadline });
+            await downloadRenderSource(plan.voiceTrack.url, voiceFilePath, { env, fetchImpl, deadline, budget });
         }
         let musicFilePath = null;
         if (plan.musicTrack) {
             musicFilePath = join(tmpDir, 'music.audio');
-            await downloadRenderSource(plan.musicTrack.url, musicFilePath, { env, fetchImpl, deadline });
+            await downloadRenderSource(plan.musicTrack.url, musicFilePath, { env, fetchImpl, deadline, budget });
         }
         const outputPath = join(tmpDir, 'output.mp4');
         let args;

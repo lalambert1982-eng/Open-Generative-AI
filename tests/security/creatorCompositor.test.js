@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { CompositorError, buildFfmpegArgs, buildRenderPlan } from '../../src/lib/creatorCompositor.js';
+import { CompositorError, MAX_CLIP_SECONDS, MAX_TOTAL_SECONDS, buildFfmpegArgs, buildRenderPlan } from '../../src/lib/creatorCompositor.js';
 import { createEmptyTimeline } from '../../src/lib/creatorTimeline.js';
 
 function timelineWithClips(clips, overrides = {}) {
@@ -183,4 +183,18 @@ test('buildFfmpegArgs with only a music track still produces audio, ducked', () 
     });
     const filterComplex = args[args.indexOf('-filter_complex') + 1];
     assert.match(filterComplex, /\[1:a]volume=0\.25\[aout]/);
+});
+
+test('buildRenderPlan rejects a clip or timeline longer than the bounds', () => {
+    assert.throws(() => buildRenderPlan(timelineWithClips([imageClip({ duration: MAX_CLIP_SECONDS + 1 })])), (error) => {
+        assert.equal(error.code, 'clip_too_long');
+        return true;
+    });
+    const clipCount = Math.ceil(MAX_TOTAL_SECONDS / MAX_CLIP_SECONDS) + 1;
+    const clips = Array.from({ length: clipCount }, (_, index) => imageClip({ id: `clip-${index}`, duration: MAX_CLIP_SECONDS }));
+    assert.throws(() => buildRenderPlan(timelineWithClips(clips)), (error) => {
+        assert.equal(error.code, 'timeline_too_long');
+        return true;
+    });
+    assert.doesNotThrow(() => buildRenderPlan(timelineWithClips([imageClip({ duration: MAX_CLIP_SECONDS })])));
 });

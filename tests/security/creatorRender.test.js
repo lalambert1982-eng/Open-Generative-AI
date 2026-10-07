@@ -255,3 +255,23 @@ test('ffmpeg is bounded by the overall render budget', async () => {
     });
     assert.ok(timeout > 0 && timeout <= 30_000);
 });
+
+test('many sources that are each under the cap but too large together fail the render', async () => {
+    const blobStore = creatorProjectStoreForTests();
+    await createCreatorProject(owner, { name: 'Render Project' }, { env, blobStore, idGenerator: () => projectId });
+    await saveCreatorStoryboard(owner, projectId, {
+        storyboard: {
+            scenes: [1, 2, 3].map((n) => ({ id: `scene-${n}`, title: `Scene ${n}`, imageUrl: sceneImage, duration: 4 })),
+        },
+    }, { env, blobStore });
+    const result = await renderCreatorTimeline(owner, projectId, {}, {
+        env,
+        blobStore,
+        assetBlobStore: assetStore(),
+        idGenerator,
+        fetchImpl: async () => new Response(Buffer.alloc(200 * 1024 * 1024), { status: 200 }),
+        execFileImpl: fakeFfmpeg,
+    });
+    assert.equal(result.render.status, 'failed');
+    assert.equal(result.render.code, 'render_sources_too_large');
+});
