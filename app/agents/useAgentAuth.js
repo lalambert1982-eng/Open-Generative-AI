@@ -1,6 +1,7 @@
 "use client";
 
 import axios from 'axios';
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
 const STORAGE_KEY = 'muapi_key';
@@ -79,9 +80,9 @@ export function AgentAuthState({ status }) {
       <div>
         <p className="mb-4 text-sm text-white/70">{message}</p>
         {status !== 'loading' && (
-          <a className="text-sm font-semibold text-cyan-400 hover:text-cyan-300" href="/studio">
+          <Link className="text-sm font-semibold text-cyan-400 hover:text-cyan-300" href="/studio">
             Open Studio
-          </a>
+          </Link>
         )}
       </div>
     </div>
