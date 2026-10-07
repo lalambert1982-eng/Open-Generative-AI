@@ -36,6 +36,10 @@ function WorkflowCard({ workflow, onClick, activeTab, onRename, onDelete }) {
   return (
     <div
       onClick={() => onClick(workflow)}
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${workflow.name}`}
+      onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onClick(workflow); } }}
       className="group relative aspect-[3/4] rounded-lg overflow-hidden cursor-pointer border border-white/5 bg-[#0a0a0a] transition-all hover:border-[#22d3ee]/30 hover:scale-[1.02] shadow-2xl"
     >
       {workflow.thumbnail ? (
@@ -72,6 +76,10 @@ function WorkflowCard({ workflow, onClick, activeTab, onRename, onDelete }) {
           <button
             onClick={() => setShowOptions(!showOptions)}
             onBlur={() => setTimeout(() => setShowOptions(false), 200)}
+            type="button"
+            aria-label={`Options for ${workflow.name}`}
+            aria-haspopup="true"
+            aria-expanded={showOptions}
             className="w-8 h-8 rounded-full bg-black/40 backdrop-blur-md border border-white/10 flex items-center justify-center text-white/60 hover:text-white transition-colors"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -108,7 +116,7 @@ function WorkflowCard({ workflow, onClick, activeTab, onRename, onDelete }) {
       {/* Community Profile Info */}
       {activeTab === 'published' && workflow.user_name && (
         <div className="absolute top-2 left-2 z-20 flex items-center gap-2 bg-black/40 backdrop-blur-md px-2 py-1 rounded-full border border-white/10">
-          <img src={workflow.user_profile || "/user_profile.png"} alt="profile" className="w-4 h-4 rounded-full" />
+          <img src={workflow.user_profile || "/user_profile.png"} alt={`${workflow.user_name} profile`} className="w-4 h-4 rounded-full" />
           <span className="text-[9px] font-black text-white/80 uppercase tracking-widest">{workflow.user_name}</span>
         </div>
       )}
@@ -169,6 +177,12 @@ export default function WorkflowStudio({
   const [activeMainTab, setActiveMainTab] = useState("templates"); // 'templates' | 'my-workflows' | 'published'
   const [renamingWorkflow, setRenamingWorkflow] = useState(null);
   const [newWorkflowName, setNewWorkflowName] = useState("");
+  useEffect(() => {
+    if (!renamingWorkflow) return undefined;
+    const onKeyDown = (event) => { if (event.key === "Escape") setRenamingWorkflow(null); };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [renamingWorkflow]);
   const [isDeletingId, setIsDeletingId] = useState(null);
   const [inputSchema, setInputSchema] = useState(null);
   const [nodeSchemas, setNodeSchemas] = useState(null);
@@ -472,6 +486,7 @@ export default function WorkflowStudio({
                         if (selectedWorkflow?.id) router.push(`/workflow/${selectedWorkflow.id}/playground`);
                     }}
                     type="button"
+                    aria-pressed={activeSubTab === "playground"}
                     className={`px-4 py-1.5 text-[10px] font-black uppercase tracking-widest rounded-md transition-all ${
                       activeSubTab === "playground"
                         ? "bg-[#22d3ee] text-black shadow-[0_0_15px_rgba(34, 211, 238,0.2)]"
@@ -488,6 +503,7 @@ export default function WorkflowStudio({
                         }
                     }}
                     type="button"
+                    aria-pressed={activeSubTab === "builder"}
                     className={`px-4 py-1.5 text-[10px] font-black uppercase tracking-widest rounded-md transition-all ${
                       activeSubTab === "builder"
                         ? "bg-[#22d3ee] text-black shadow-[0_0_15px_rgba(34, 211, 238,0.2)]"
@@ -508,6 +524,7 @@ export default function WorkflowStudio({
                 onClick={() => onToggleHeader?.(false)}
                 className="p-1.5 bg-white/5 hover:bg-white/10 rounded-md transition-colors text-white/40 hover:text-white"
                 title="Enter Zen Mode"
+                aria-label="Enter Zen Mode"
                 type="button"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -523,6 +540,7 @@ export default function WorkflowStudio({
                onClick={() => router.push("/studio/workflows")}
                className="p-1.5 text-white/40 hover:text-white transition-colors"
                title="Back to All Workflows"
+               aria-label="Back to All Workflows"
                type="button"
             >
                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
@@ -534,6 +552,7 @@ export default function WorkflowStudio({
                <button
                  onClick={() => setActiveSubTab("playground")}
                  type="button"
+                 aria-pressed={activeSubTab === "playground"}
                  className={`px-3 py-1 text-[9px] font-black uppercase tracking-widest rounded-md transition-all ${
                    activeSubTab === "playground" ? "bg-[#22d3ee] text-black" : "text-white/40"
                  }`}
@@ -543,6 +562,7 @@ export default function WorkflowStudio({
                <button
                  onClick={() => setActiveSubTab("builder")}
                  type="button"
+                 aria-pressed={activeSubTab === "builder"}
                  className={`px-3 py-1 text-[9px] font-black uppercase tracking-widest rounded-md transition-all ${
                    activeSubTab === "builder" ? "bg-[#22d3ee] text-black" : "text-white/40"
                  }`}
@@ -775,7 +795,7 @@ export default function WorkflowStudio({
                             <img
                               src={out.value}
                               className="w-full aspect-square object-cover"
-                              alt="Output"
+                              alt={`Workflow output ${idx + 1}`}
                             />
                           ) : out.type === "video_url" ? (
                             <video
@@ -892,6 +912,7 @@ export default function WorkflowStudio({
           <div className="flex items-center gap-2 border-b border-white/5">
             <button
               onClick={() => setActiveMainTab("templates")}
+              aria-pressed={activeMainTab === "templates"}
               className={`px-6 py-4 text-xs font-black uppercase tracking-[0.2em] transition-all border-b-2 ${
                 activeMainTab === "templates"
                   ? "text-[#22d3ee] border-[#22d3ee]"
@@ -902,6 +923,7 @@ export default function WorkflowStudio({
             </button>
             <button
               onClick={() => setActiveMainTab("my-workflows")}
+              aria-pressed={activeMainTab === "my-workflows"}
               className={`px-6 py-4 text-xs font-black uppercase tracking-[0.2em] transition-all border-b-2 ${
                 activeMainTab === "my-workflows"
                   ? "text-[#22d3ee] border-[#22d3ee]"
@@ -912,6 +934,7 @@ export default function WorkflowStudio({
             </button>
             <button
               onClick={() => setActiveMainTab("published")}
+              aria-pressed={activeMainTab === "published"}
               className={`px-6 py-4 text-xs font-black uppercase tracking-[0.2em] transition-all border-b-2 ${
                 activeMainTab === "published"
                   ? "text-[#22d3ee] border-[#22d3ee]"

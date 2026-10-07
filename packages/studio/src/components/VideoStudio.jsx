@@ -270,6 +270,16 @@ function ModelDropdown({ selectedModel, onSelect, onClose }) {
       key={`${category}:${m.id}`}
       ref={selectedModel === m.id ? activeItemRef : null}
       className={`flex items-center justify-between p-3.5 hover:bg-white/5 rounded-2xl cursor-pointer transition-all border border-transparent hover:border-white/5 ${selectedModel === m.id ? "bg-white/5 border-white/5" : ""}`}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          e.stopPropagation();
+          onSelect(m, category);
+          onClose();
+        }
+      }}
       onClick={(e) => {
         e.stopPropagation();
         onSelect(m, category);
@@ -329,6 +339,8 @@ function ModelDropdown({ selectedModel, onSelect, onClose }) {
               : "bg-white/[0.02] text-white/50 border-white/[0.03] hover:bg-white/5 hover:text-white"
           }`}
           title="All Providers"
+          aria-label="All Providers"
+          aria-pressed={selectedProvider === "all"}
         >
           <svg width="15" height="15" viewBox="0 0 24 24" fill={selectedProvider === "all" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2">
             <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
@@ -349,6 +361,8 @@ function ModelDropdown({ selectedModel, onSelect, onClose }) {
                   : "bg-white/[0.02] text-white/40 border-white/[0.02] hover:bg-white/5 hover:text-white/80"
               }`}
               title={p.name}
+              aria-label={p.name}
+              aria-pressed={isSelected}
             >
               {PROVIDER_LOGOS[p.id] ? (
                 <img
@@ -376,6 +390,7 @@ function ModelDropdown({ selectedModel, onSelect, onClose }) {
                   setSelectedCategory(category.id);
                   setSelectedProvider("all");
                 }}
+                aria-pressed={selectedCategory === category.id}
                 className={`shrink-0 rounded-lg px-2.5 py-1.5 text-[10px] font-bold transition-colors border ${
                   selectedCategory === category.id
                     ? "bg-primary/15 text-primary border-primary/30"
@@ -517,6 +532,12 @@ export default function VideoStudio({
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState(null);
   const [fullscreenUrl, setFullscreenUrl] = useState(null);
+  useEffect(() => {
+    if (!fullscreenUrl) return undefined;
+    const onKeyDown = (e) => { if (e.key === "Escape") setFullscreenUrl(null); };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [fullscreenUrl]);
   const [canvasUrl, setCanvasUrl] = useState(null);
   const [canvasModel, setCanvasModel] = useState(null);
   const [showCanvas, setShowCanvas] = useState(false);
@@ -1438,6 +1459,10 @@ export default function VideoStudio({
                 <div
                   key={entry.id || idx}
                   className="relative group rounded-lg overflow-hidden border border-white/10 bg-[#0a0a0a] shadow-xl hover:border-primary/50 transition-all duration-300 flex flex-col cursor-pointer"
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Open fullscreen preview"
+                  onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setFullscreenUrl(entry.url); } }}
                   onClick={() => setFullscreenUrl(entry.url)}
                 >
                   <video
@@ -1463,6 +1488,7 @@ export default function VideoStudio({
                     <button
                       type="button"
                       title="Download"
+                      aria-label="Download"
                       onClick={(e) => {
                         e.stopPropagation();
                         downloadFile(entry.url, `video-${entry.id || idx}.mp4`);
@@ -1477,6 +1503,7 @@ export default function VideoStudio({
                       <button
                         type="button"
                         title="Extend this video using Seedance 2.0 Extend"
+                        aria-label="Extend this video"
                         onClick={(e) => {
                           e.stopPropagation();
                           setLastGenerationId(entry.id);
@@ -1492,6 +1519,7 @@ export default function VideoStudio({
                     <button
                       type="button"
                       title="Delete"
+                      aria-label="Delete"
                       onClick={(e) => {
                         e.stopPropagation();
                         if (confirm("Are you sure you want to delete this generated item?")) {
@@ -1712,6 +1740,7 @@ export default function VideoStudio({
                       <button
                         type="button"
                         title="Upload reference image"
+                        aria-label="Upload reference image"
                         onClick={() => imageFileInputRef.current?.click()}
                         className={promptMediaButtonClassName()}
                       >
@@ -1755,6 +1784,7 @@ export default function VideoStudio({
                       <button
                         type="button"
                         title="Upload reference image"
+                        aria-label="Upload reference image"
                         onClick={() => imageFileInputRef.current?.click()}
                         className={promptMediaButtonClassName()}
                       >
@@ -1801,6 +1831,7 @@ export default function VideoStudio({
                   <button
                     type="button"
                     title="Upload end frame (optional)"
+                    aria-label="Upload end frame (optional)"
                     onClick={() => endImageFileInputRef.current?.click()}
                     className={promptMediaButtonClassName()}
                   >
@@ -1846,6 +1877,7 @@ export default function VideoStudio({
                   <button
                     type="button"
                     title="Upload video to remove watermark"
+                    aria-label="Upload video to remove watermark"
                     onClick={() => videoFileInputRef.current?.click()}
                     className={promptMediaButtonClassName()}
                   >
@@ -2189,11 +2221,15 @@ export default function VideoStudio({
       {/* ── FULLSCREEN VIDEO MODAL ── */}
       {fullscreenUrl && (
         <div 
+          role="dialog"
+          aria-modal="true"
+          aria-label="Fullscreen video preview"
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 backdrop-blur-sm animate-fade-in"
           onClick={() => setFullscreenUrl(null)}
         >
           <button
             type="button"
+            aria-label="Close preview"
             className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors border border-white/10"
             onClick={(e) => {
               e.stopPropagation();

@@ -152,6 +152,13 @@ export default function SocialPublishStudio({ initialAsset = null, initialDraft 
   useEffect(() => { loadSocial(); }, []);
 
   useEffect(() => {
+    if (!reviewing) return undefined;
+    const onKeyDown = (event) => { if (event.key === "Escape") setReviewing(false); };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [reviewing]);
+
+  useEffect(() => {
     if (!platformAccounts.some((account) => String(account.id) === String(accountId))) {
       setAccountId(platformAccounts[0] ? String(platformAccounts[0].id) : "");
     }
@@ -276,8 +283,8 @@ export default function SocialPublishStudio({ initialAsset = null, initialDraft 
     return (
       <div className="flex h-full min-h-0 flex-col bg-[#050506] text-white">
         <div className="flex shrink-0 gap-2 border-b border-white/[0.07] px-5 py-3">
-          <button type="button" onClick={() => setMode("social")} className="rounded-xl px-4 py-2 text-xs font-bold text-white/40">Instagram &amp; TikTok</button>
-          <button type="button" className="rounded-xl bg-white/[0.08] px-4 py-2 text-xs font-bold text-white"><Video size={14} className="mr-2 inline" /> YouTube</button>
+          <button type="button" onClick={() => setMode("social")} aria-pressed={false} className="rounded-xl px-4 py-2 text-xs font-bold text-white/40">Instagram &amp; TikTok</button>
+          <button type="button" aria-pressed={true} className="rounded-xl bg-white/[0.08] px-4 py-2 text-xs font-bold text-white"><Video size={14} className="mr-2 inline" /> YouTube</button>
         </div>
         <div className="min-h-0 flex-1">{youtubeWorkspace}</div>
       </div>
@@ -297,8 +304,8 @@ export default function SocialPublishStudio({ initialAsset = null, initialDraft 
         </header>
 
         <div className="mt-6 flex gap-2 border-b border-white/[0.07] pb-3">
-          <button type="button" className="rounded-xl bg-white/[0.08] px-4 py-2 text-xs font-bold text-white">Instagram &amp; TikTok</button>
-          <button type="button" onClick={() => setMode("youtube")} className="rounded-xl px-4 py-2 text-xs font-bold text-white/40 hover:text-white"><Video size={14} className="mr-2 inline" /> YouTube</button>
+          <button type="button" aria-pressed={true} className="rounded-xl bg-white/[0.08] px-4 py-2 text-xs font-bold text-white">Instagram &amp; TikTok</button>
+          <button type="button" onClick={() => setMode("youtube")} aria-pressed={false} className="rounded-xl px-4 py-2 text-xs font-bold text-white/40 hover:text-white"><Video size={14} className="mr-2 inline" /> YouTube</button>
         </div>
 
         {error && <div role="alert" className="mt-5 rounded-2xl border border-red-300/20 bg-red-300/[0.07] px-4 py-3 text-sm text-red-100">{error}</div>}
@@ -314,13 +321,13 @@ export default function SocialPublishStudio({ initialAsset = null, initialDraft 
             <label className="mt-5 block text-[10px] font-black uppercase tracking-wider text-white/35">Creator Asset URL</label>
             <div className="mt-2 flex items-center gap-2 rounded-xl border border-white/[0.09] bg-black/30 px-3"><Link2 size={14} className="text-white/25" /><input value={mediaUrl} onChange={(event) => setMediaUrl(event.target.value)} placeholder="https://cdn.muapi.ai/..." className="min-w-0 flex-1 bg-transparent py-3 text-xs outline-none placeholder:text-white/15" /></div>
             <div className="mt-3 flex gap-2">
-              {["image", "video"].map((type) => <button key={type} type="button" disabled={platform === "tiktok" && type === "image"} onClick={() => setMediaType(type)} className={`rounded-lg px-3 py-2 text-[10px] font-bold uppercase ${mediaType === type ? "bg-cyan-300 text-black" : "border border-white/[0.09] text-white/40 disabled:opacity-20"}`}>{type}</button>)}
+              {["image", "video"].map((type) => <button key={type} type="button" disabled={platform === "tiktok" && type === "image"} onClick={() => setMediaType(type)} aria-pressed={mediaType === type} className={`rounded-lg px-3 py-2 text-[10px] font-bold uppercase ${mediaType === type ? "bg-cyan-300 text-black" : "border border-white/[0.09] text-white/40 disabled:opacity-20"}`}>{type}</button>)}
             </div>
           </section>
 
           <section className="rounded-3xl border border-white/[0.08] bg-white/[0.025] p-5">
             <div className="grid grid-cols-2 gap-2">
-              {PLATFORMS.map((item) => { const Icon = item.icon; return <button key={item.id} type="button" onClick={() => { setPlatform(item.id); if (item.id === "tiktok") setMediaType("video"); }} className={`rounded-xl border px-3 py-3 text-xs font-bold ${platform === item.id ? "border-cyan-300/30 bg-cyan-300/[0.08] text-cyan-100" : "border-white/[0.08] text-white/40"}`}><Icon size={15} className="mr-2 inline" />{item.label}</button>; })}
+              {PLATFORMS.map((item) => { const Icon = item.icon; return <button key={item.id} type="button" onClick={() => { setPlatform(item.id); if (item.id === "tiktok") setMediaType("video"); }} aria-pressed={platform === item.id} className={`rounded-xl border px-3 py-3 text-xs font-bold ${platform === item.id ? "border-cyan-300/30 bg-cyan-300/[0.08] text-cyan-100" : "border-white/[0.08] text-white/40"}`}><Icon size={15} className="mr-2 inline" />{item.label}</button>; })}
             </div>
 
             <div className="mt-5 flex items-center justify-between"><p className="text-[10px] font-black uppercase tracking-wider text-white/35">Connected accounts</p><button type="button" onClick={loadSocial} disabled={loading} aria-label="Refresh social accounts"><RefreshCw size={13} className={loading ? "animate-spin text-white/20" : "text-white/40"} /></button></div>
