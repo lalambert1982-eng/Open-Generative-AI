@@ -16,7 +16,9 @@ Creator Studio is the private creative operating-system shell. Selena is its pri
 
 ### Brain cost policy
 
-Every brain provider reports a `costTier` in `GET /api/creator/providers`: `paid` (MuAPI Agent on a Production or dedicated key), `sandbox` (MuAPI Agent on the zero-cost mock key), or `low-cost` (Gemini, Groq, OpenRouter, NVIDIA; free tier or low per-token pricing, depending on the account plan). The router never picks a paid brain on its own:
+Every brain provider reports a `costTier` in `GET /api/creator/providers`: `paid` (MuAPI Agent on a Production or dedicated key), `sandbox` (MuAPI Agent on the zero-cost mock key), or `low-cost` (Gemini, Groq, OpenRouter, NVIDIA; free tier or low per-token pricing, depending on the account plan). The router does not choose a paid brain beyond what is configured:
+
+Automatic fallback never advances onto a `paid` provider that was not the selected one (a failure on Gemini or NVIDIA is never rerouted to the paid MuAPI Agent). Note that `muapi-agent` is the default `BRAIN_PROVIDER`; in Production it stays unconfigured unless the paid decision below is made. A dedicated `MUAPI_AGENT_API_KEY` alone counts as that decision.
 
 - Everyday reasoning should run on a `low-cost` provider when one is configured (`BRAIN_PROVIDER=gemini`).
 - The paid MuAPI Agent brain needs an explicit decision: `BRAIN_PROVIDER=muapi-agent` and either `MUAPI_ALLOW_PAID_GENERATION=true` or a dedicated `MUAPI_AGENT_API_KEY`.
@@ -226,7 +228,7 @@ The defaults are listed in `.env.example`:
 - `MUAPI_API_KEY` is selected only when `MUAPI_KEY_MODE=sandbox`.
 - `MUAPI_PRODUCTION_API_KEY` is selected only when `MUAPI_KEY_MODE=production`.
 - `MUAPI_ALLOW_PAID_GENERATION=false` is the fail-closed default. Production mode is rejected unless this variable is deliberately changed to `true`; changing the flag alone does not select the Production credential.
-- The Selena MuAPI Agent brain follows the same rule: MuAPI bills agent chat turns, so the brain uses `MUAPI_PRODUCTION_API_KEY` only when `MUAPI_ALLOW_PAID_GENERATION=true`. A dedicated `MUAPI_AGENT_API_KEY` counts as an explicit decision and is used in any mode. Otherwise the brain reports itself unconfigured and fails closed; it never reroutes to another provider.
+- The Selena MuAPI Agent brain follows the same rule: MuAPI bills agent chat turns, so the brain uses `MUAPI_PRODUCTION_API_KEY` only when `MUAPI_ALLOW_PAID_GENERATION=true`. A dedicated `MUAPI_AGENT_API_KEY` counts as an explicit decision and is used in any mode. Otherwise the brain reports itself unconfigured and fails closed; a missing key never reroutes to another provider (a runtime failure on a different selected provider also never reroutes onto this paid brain).
 - `MUAPI_ALLOW_SOCIAL_PUBLISHING=false` independently locks paid external publishing without changing media-generation mode.
 - `MUAPI_SOCIAL_API_KEY` optionally isolates social access; if absent, the server falls back to `MUAPI_PRODUCTION_API_KEY`.
 - `MUAPI_TIKTOK_PUBLIC_PUBLISHING_APPROVED=false` forces TikTok `SELF_ONLY` even when a broader privacy value is submitted.

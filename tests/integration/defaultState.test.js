@@ -88,3 +88,30 @@ test('An unknown BRAIN_PROVIDER is rejected with a configuration error, not a si
     );
     assert.deepEqual(calls, []);
 });
+
+test('A runtime NVIDIA failure never falls back onto the paid MuAPI brain', async () => {
+    const urls = [];
+    const geminiBody = {
+        modelVersion: 'gemini-test',
+        candidates: [{ content: { parts: [{ text: 'Gemini plan' }] }, finishReason: 'STOP' }],
+        usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+    };
+    const result = await reasonWithBrain(request, {
+        env: {
+            BRAIN_PROVIDER: 'nvidia',
+            NVIDIA_API_KEY: 'nvapi-test-provider-secret',
+            GEMINI_API_KEY: 'gemini-test-provider-secret',
+            MUAPI_KEY_MODE: 'production',
+            MUAPI_PRODUCTION_API_KEY: 'muapi-prod-test-provider-secret',
+            MUAPI_ALLOW_PAID_GENERATION: 'true',
+        },
+        fetchImpl: async (url) => {
+            urls.push(String(url));
+            if (String(url).includes('nvidia.com')) return new Response('{}', { status: 503 });
+            if (String(url).includes('googleapis.com')) return new Response(JSON.stringify(geminiBody), { status: 200 });
+            throw new Error(`unexpected provider call: ${url}`);
+        },
+    });
+    assert.equal(result.provider, 'gemini');
+    assert.equal(urls.some((url) => url.includes('muapi')), false);
+});

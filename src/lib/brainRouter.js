@@ -917,7 +917,11 @@ export async function reasonWithBrain(request, {
     const eligibleProviders = parseSensitivityProviders(env, normalized.sensitivity);
     const order = [];
     for (const provider of configuredOrder) {
-        if (eligibleProviders.includes(provider) && !order.includes(provider)) order.push(provider);
+        if (!eligibleProviders.includes(provider) || order.includes(provider)) continue;
+        // A failure on a chosen provider may fall back to another one, but never
+        // onto a paid one the operator did not select (docs: "never picks a paid brain on its own").
+        if (provider !== selectedProvider && costTierFor(provider, env) === 'paid') continue;
+        order.push(provider);
     }
     if (order.length === 0) {
         throw new BrainRouterError(
