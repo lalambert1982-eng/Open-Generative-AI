@@ -372,6 +372,7 @@ export default function LayoutStudio() {
                   key={object.id}
                   type="button"
                   onClick={() => setSelectedObjectId(object.id)}
+                  aria-pressed={selectedObjectId === object.id}
                   className={`flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left text-[11px] transition ${selectedObjectId === object.id ? "border-[#f4bd50]/45 bg-[#f4bd50]/10 text-[#ffe8ae]" : "border-white/[0.07] bg-black/20 text-white/55 hover:bg-white/[0.05] hover:text-white"}`}
                 >
                   <LayerIcon type={object.type} />

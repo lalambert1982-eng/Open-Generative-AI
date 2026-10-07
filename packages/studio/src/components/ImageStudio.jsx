@@ -484,6 +484,7 @@ function UploadButton({ apiKey, maxImages, onSelect, onClear, initialUrls = [], 
                         <button
                           type="button"
                           title="Remove from history"
+                          aria-label="Remove from history"
                           onClick={(e) => handleRemoveFromHistory(e, entry)}
                           className="w-5 h-5 bg-red-500/80 hover:bg-red-500 rounded-md flex items-center justify-center transition-colors"
                         >
@@ -696,6 +697,8 @@ function ModelDropdown({ selectedModel, onSelect, onClose }) {
               : "bg-white/[0.02] text-white/50 border-white/[0.03] hover:bg-white/5 hover:text-white"
           }`}
           title="All Providers"
+          aria-label="All Providers"
+          aria-pressed={selectedProvider === "all"}
         >
           <svg width="15" height="15" viewBox="0 0 24 24" fill={selectedProvider === "all" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2">
             <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
@@ -716,6 +719,8 @@ function ModelDropdown({ selectedModel, onSelect, onClose }) {
                   : "bg-white/[0.02] text-white/40 border-white/[0.02] hover:bg-white/5 hover:text-white/80"
               }`}
               title={p.name}
+              aria-label={p.name}
+              aria-pressed={isSelected}
             >
               {PROVIDER_LOGOS[p.id] ? (
                 <img
@@ -743,6 +748,7 @@ function ModelDropdown({ selectedModel, onSelect, onClose }) {
                   setSelectedCategory(category.id);
                   setSelectedProvider("all");
                 }}
+                aria-pressed={selectedCategory === category.id}
                 className={`shrink-0 rounded-lg px-2.5 py-1.5 text-[10px] font-bold transition-colors border ${
                   selectedCategory === category.id
                     ? "bg-primary/15 text-primary border-primary/30"
@@ -796,6 +802,16 @@ function ModelDropdown({ selectedModel, onSelect, onClose }) {
               <div
                 key={`${category}:${m.id}`}
                 ref={selectedModel === m.id ? activeItemRef : null}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onSelect(m, category);
+                    onClose();
+                  }
+                }}
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelect(m, category);
@@ -929,6 +945,12 @@ export default function ImageStudio({
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState(null);
   const [fullscreenUrl, setFullscreenUrl] = useState(null);
+  useEffect(() => {
+    if (!fullscreenUrl) return undefined;
+    const onKeyDown = (e) => { if (e.key === "Escape") setFullscreenUrl(null); };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [fullscreenUrl]);
   const [isDrawModalOpen, setIsDrawModalOpen] = useState(false);
 
   // ── Canvas / history state ──────────────────────────────────────────────
@@ -1394,6 +1416,10 @@ export default function ImageStudio({
               <div
                 key={entry.id || idx}
                 className="relative group rounded-lg overflow-hidden border border-white/10 bg-[#0a0a0a] shadow-xl hover:border-primary/50 transition-all duration-300 flex flex-col cursor-pointer"
+                role="button"
+                tabIndex={0}
+                aria-label="Open fullscreen preview"
+                onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setFullscreenUrl(entry.url); } }}
                 onClick={() => setFullscreenUrl(entry.url)}
               >
                 <img
@@ -1412,6 +1438,7 @@ export default function ImageStudio({
                   <button
                     type="button"
                     title="Download"
+                    aria-label="Download"
                     onClick={(e) => {
                       e.stopPropagation();
                       downloadImage(entry.url, `muapi-${entry.id || idx}.jpg`);
@@ -1425,6 +1452,7 @@ export default function ImageStudio({
                   <button
                     type="button"
                     title="Delete"
+                    aria-label="Delete"
                     onClick={(e) => {
                       e.stopPropagation();
                       if (confirm("Are you sure you want to delete this generated item?")) {
@@ -1549,6 +1577,7 @@ export default function ImageStudio({
                       setUploadedImageUrls(next);
                       if (next.length === 0) handleUploadClear();
                     }}
+                    aria-label={`Remove reference image ${idx + 1}`}
                     className="absolute top-0.5 right-0.5 w-4 h-4 bg-black/60 hover:bg-black rounded-full flex items-center justify-center text-white/85 hover:text-white text-[8px] border border-white/5"
                   >
                     ×
@@ -1754,6 +1783,7 @@ export default function ImageStudio({
                 <button
                   type="button"
                   onClick={() => setBatchSize(prev => Math.max(1, prev - 1))}
+                  aria-label="Decrease batch size"
                   className="text-white/40 hover:text-white/80 font-extrabold text-xs transition-colors px-1"
                 >
                   -
@@ -1764,6 +1794,7 @@ export default function ImageStudio({
                 <button
                   type="button"
                   onClick={() => setBatchSize(prev => Math.min(4, prev + 1))}
+                  aria-label="Increase batch size"
                   className="text-white/40 hover:text-white/80 font-extrabold text-xs transition-colors px-1"
                 >
                   +
@@ -1808,11 +1839,15 @@ export default function ImageStudio({
       {/* ── FULLSCREEN IMAGE MODAL ── */}
       {fullscreenUrl && (
         <div 
+          role="dialog"
+          aria-modal="true"
+          aria-label="Fullscreen image preview"
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 backdrop-blur-sm animate-fade-in"
           onClick={() => setFullscreenUrl(null)}
         >
           <button
             type="button"
+            aria-label="Close preview"
             className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors border border-white/10"
             onClick={(e) => {
               e.stopPropagation();
