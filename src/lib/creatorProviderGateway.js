@@ -39,7 +39,13 @@ import {
     nvidiaImageProviderStatus,
 } from './nvidiaCreatorProvider.js';
 import { checkRateLimit } from './rateLimit.js';
-import { CreatorProjectError, getCreatorProject } from './creatorProjectStore.js';
+import {
+    CreatorProjectError,
+    creatorAssetStorageConfiguration,
+    creatorProjectConfiguration,
+    creatorRenderEnabled,
+    getCreatorProject,
+} from './creatorProjectStore.js';
 import {
     boundedSelenaContext,
     buildSelenaBrainRequest,
@@ -390,12 +396,17 @@ export async function handleCreatorProviders(request, { env = process.env } = {}
     const brainProviders = brainProviderStatuses(env);
     const generationProviders = generationProviderStatuses(env);
     const deferredGenerationProviders = deferredGenerationProviderStatuses(env);
+    const renderEnabled = creatorRenderEnabled(env);
     return creatorJson({
         providers: [brain, ...generationProviders],
         brain,
         brainProviders,
         generationProviders,
         deferredGenerationProviders,
+        rendering: {
+            enabled: renderEnabled,
+            configured: renderEnabled && creatorProjectConfiguration(env).configured && creatorAssetStorageConfiguration(env).configured,
+        },
     });
 }
 

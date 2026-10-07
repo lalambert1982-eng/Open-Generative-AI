@@ -46,6 +46,25 @@ function creatorRequest(path, body, sessionValue = session, extraHeaders = {}) {
     });
 }
 
+test('export availability requires the render flag and both Project and Asset storage without exposing tokens', async () => {
+    const projectToken = 'fixture-private-project-token-long-enough';
+    const assetToken = 'fixture-public-asset-token-long-enough';
+    for (const [settings, expected] of [
+        [{}, { enabled: false, configured: false }],
+        [{ CREATOR_RENDER_ENABLED: 'true' }, { enabled: true, configured: false }],
+        [{ CREATOR_RENDER_ENABLED: 'true', BLOB_READ_WRITE_TOKEN: projectToken }, { enabled: true, configured: false }],
+        [{ CREATOR_RENDER_ENABLED: 'true', BLOB_READ_WRITE_TOKEN: projectToken, CREATOR_ASSET_BLOB_READ_WRITE_TOKEN: assetToken }, { enabled: true, configured: true }],
+    ]) {
+        resetRateLimitStore();
+        const response = await handleCreatorProviders(creatorRequest('providers'), { env: { ...baseEnv, ...settings } });
+        assert.equal(response.status, 200);
+        const text = await response.text();
+        assert.deepEqual(JSON.parse(text).rendering, expected);
+        assert.equal(text.includes(projectToken), false);
+        assert.equal(text.includes(assetToken), false);
+    }
+});
+
 test('creator gateway rejects missing, tampered, or weak session authentication', async () => {
     resetRateLimitStore();
     const missing = await handleCreatorProviders(creatorRequest('providers', undefined, ''), {

@@ -90,7 +90,7 @@ test('An unknown BRAIN_PROVIDER is rejected with a configuration error, not a si
 });
 
 test('A runtime NVIDIA failure never falls back onto the paid MuAPI brain', async () => {
-    const urls = [];
+    const hosts = [];
     const geminiBody = {
         modelVersion: 'gemini-test',
         candidates: [{ content: { parts: [{ text: 'Gemini plan' }] }, finishReason: 'STOP' }],
@@ -106,12 +106,13 @@ test('A runtime NVIDIA failure never falls back onto the paid MuAPI brain', asyn
             MUAPI_ALLOW_PAID_GENERATION: 'true',
         },
         fetchImpl: async (url) => {
-            urls.push(String(url));
-            if (String(url).includes('nvidia.com')) return new Response('{}', { status: 503 });
-            if (String(url).includes('googleapis.com')) return new Response(JSON.stringify(geminiBody), { status: 200 });
-            throw new Error(`unexpected provider call: ${url}`);
+            const host = new URL(String(url)).hostname;
+            hosts.push(host);
+            if (host === 'integrate.api.nvidia.com') return new Response('{}', { status: 503 });
+            if (host === 'generativelanguage.googleapis.com') return new Response(JSON.stringify(geminiBody), { status: 200 });
+            throw new Error(`unexpected provider call: ${host}`);
         },
     });
     assert.equal(result.provider, 'gemini');
-    assert.equal(urls.some((url) => url.includes('muapi')), false);
+    assert.deepEqual(hosts, ['integrate.api.nvidia.com', 'generativelanguage.googleapis.com']);
 });
