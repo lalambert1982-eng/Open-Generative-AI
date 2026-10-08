@@ -47,26 +47,81 @@ export function isReplicateDeliveryUrl(value) {
     }
 }
 
+async function readBounded(response, deadline, tooLarge) {
+    if (!response.body || typeof response.body.getReader !== 'function') {
+        const bytes = Buffer.from(await Promise.race([response.arrayBuffer(), deadline.promise]));
+        if (bytes.length > MAX_MEDIA_BYTES) throw tooLarge;
+        return bytes;
+    }
+    const reader = response.body.getReader();
+    const chunks = [];
+    let total = 0;
+    try {
+        for (;;) {
+            const { done, value } = await Promise.race([reader.read(), deadline.promise]);
+            if (done) break;
+            total += value.length;
+            if (total > MAX_MEDIA_BYTES) {
+                await reader.cancel().catch(() => {});
+                throw tooLarge;
+            }
+            chunks.push(value);
+        }
+    } catch (error) {
+        if (error === tooLarge) throw error;
+        await reader.cancel().catch(() => {});
+        throw new PersistError('download_failed', 'Could not download the generated output.');
+    }
+    return Buffer.concat(chunks, total);
+}
+
 async function downloadOutput(outputUrl, kind, fetchImpl) {
     if (!isReplicateDeliveryUrl(outputUrl)) {
         throw new PersistError('output_not_allowed', 'The generated output is not on an allowed host.');
     }
-    let response;
+    const controller = new AbortController();
+    let timer;
+    const deadline = {
+        promise: new Promise((_resolve, reject) => {
+            timer = setTimeout(() => {
+                controller.abort();
+                reject(new Error('download_timeout'));
+            }, DOWNLOAD_TIMEOUT_MS);
+        }),
+    };
+    deadline.promise.catch(() => {});
     try {
-        response = await fetchImpl(outputUrl, { redirect: 'error', signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
-    } catch {
-        throw new PersistError('download_failed', 'Could not download the generated output.');
+        let response;
+        try {
+            response = await Promise.race([fetchImpl(outputUrl, { redirect: 'error', signal: controller.signal }), deadline.promise]);
+        } catch {
+            throw new PersistError('download_failed', 'Could not download the generated output.');
+        }
+        if (!response.ok) throw new PersistError('download_failed', 'The generated output is no longer available.');
+        const tooLarge = new PersistError('output_too_large', 'The generated output is too large.', 413);
+        if (Number(response.headers?.get?.('content-length') || 0) > MAX_MEDIA_BYTES) {
+            await response.body?.cancel?.().catch(() => {});
+            throw tooLarge;
+        }
+        const contentType = String(response.headers?.get?.('content-type') || '').split(';')[0].trim().toLowerCase();
+        if (!EXTENSIONS[contentType] || !contentType.startsWith(`${kind}/`)) {
+            await response.body?.cancel?.().catch(() => {});
+            throw new PersistError('unexpected_media_type', 'The generated output has an unexpected media type.');
+        }
+        return { bytes: await readBounded(response, deadline, tooLarge), contentType };
+    } finally {
+        clearTimeout(timer);
     }
-    if (!response.ok) throw new PersistError('download_failed', 'The generated output is no longer available.');
-    const tooLarge = new PersistError('output_too_large', 'The generated output is too large.', 413);
-    if (Number(response.headers?.get?.('content-length') || 0) > MAX_MEDIA_BYTES) throw tooLarge;
-    const contentType = String(response.headers?.get?.('content-type') || '').split(';')[0].trim().toLowerCase();
-    if (!EXTENSIONS[contentType] || !contentType.startsWith(`${kind}/`)) {
-        throw new PersistError('unexpected_media_type', 'The generated output has an unexpected media type.');
-    }
-    const bytes = Buffer.from(await response.arrayBuffer());
-    if (bytes.length > MAX_MEDIA_BYTES) throw tooLarge;
-    return { bytes, contentType };
+}
+
+function validateRecord(record) {
+    const jobId = record?.jobId;
+    const valid = typeof jobId === 'string'
+        && /^[A-Za-z0-9_-]{3,60}$/.test(jobId)
+        && (record.kind === 'image' || record.kind === 'video')
+        && typeof record.mock === 'boolean'
+        && record.mock === jobId.startsWith('mock_');
+    if (!valid) throw new PersistError('invalid_record', 'The generation record is invalid.', 400);
 }
 
 export async function persistGeneratedAsset({
@@ -81,6 +136,7 @@ export async function persistGeneratedAsset({
     now = Date.now(),
     idGenerator,
 }) {
+    validateRecord(record);
     const assetConfiguration = creatorAssetStorageConfiguration(env);
     if (!assetConfiguration.configured) {
         throw new PersistError('asset_storage_unconfigured', 'Asset storage is not configured.', 503);
@@ -104,14 +160,20 @@ export async function persistGeneratedAsset({
     } catch {
         throw new PersistError('upload_failed', 'The generated output could not be stored.');
     }
-    return addCreatorAsset(user, projectId, {
-        type: record.mock ? 'graphic' : record.kind,
-        title: String(record.prompt || 'Generated asset').slice(0, 160),
-        url: uploaded.url,
-        storagePath,
-        source: 'replicate',
-        mimeType: media.contentType,
-        size: media.bytes.length,
-        provider: { provider: 'replicate', model: record.model, jobId: record.jobId },
-    }, { env, blobStore, now, ...(idGenerator ? { idGenerator } : {}) });
+    try {
+        return await addCreatorAsset(user, projectId, {
+            type: record.mock ? 'graphic' : record.kind,
+            title: String(record.prompt || 'Generated asset').slice(0, 160),
+            url: uploaded.url,
+            storagePath,
+            source: 'replicate',
+            mimeType: media.contentType,
+            size: media.bytes.length,
+            provider: { provider: 'replicate', model: record.model, jobId: record.jobId },
+        }, { env, blobStore, now, ...(idGenerator ? { idGenerator } : {}) });
+    } catch (error) {
+        // Nothing references the blob yet; remove it and surface the original failure.
+        await Promise.resolve(assetBlobStore.del?.(storagePath, { token: assetConfiguration.blobToken })).catch(() => {});
+        throw error;
+    }
 }

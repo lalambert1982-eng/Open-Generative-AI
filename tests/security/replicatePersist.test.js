@@ -111,3 +111,60 @@ test('missing asset storage configuration and foreign Projects fail without stor
     await assert.rejects(persistGeneratedAsset({ user: other, projectId, record, outputUrl, env, fetchImpl, assetBlobStore, blobStore }), (e) => e.status === 404);
     assert.equal(assetBlobStore.puts.length, 0);
 });
+
+test('a mid-stream read failure becomes download_failed and nothing is stored', async () => {
+    const { blobStore, assetBlobStore } = await setup();
+    const body = new ReadableStream({
+        start(controller) {
+            controller.enqueue(new Uint8Array(10));
+        },
+        pull() {
+            throw new Error('socket reset');
+        },
+    });
+    const fetchImpl = async () => new Response(body, { status: 200, headers: { 'content-type': 'image/png' } });
+    await assert.rejects(
+        persistGeneratedAsset({ user: owner, projectId, record, outputUrl: 'https://replicate.delivery/a.png', env, fetchImpl, assetBlobStore, blobStore }),
+        (e) => e instanceof PersistError && e.code === 'download_failed' && e.status === 502,
+    );
+    assert.equal(assetBlobStore.puts.length, 0);
+});
+
+test('the uploaded blob is removed when adding the Asset fails, but not when the Asset already exists', async () => {
+    const { blobStore, assetBlobStore } = await setup();
+    const dels = [];
+    assetBlobStore.del = async (...args) => { dels.push(args); };
+    const fetchImpl = async () => mediaResponse('image/png');
+    const args = { user: owner, projectId, record, outputUrl: 'https://replicate.delivery/a.png', env, fetchImpl, assetBlobStore };
+    const failing = { ...blobStore, async put() { throw new Error('manifest write failed'); } };
+    await assert.rejects(persistGeneratedAsset({ ...args, blobStore: failing }), (e) => e.message !== undefined && !(e instanceof PersistError && e.code === 'upload_failed'));
+    assert.equal(assetBlobStore.puts.length, 1);
+    assert.equal(dels.length, 1);
+    assert.equal(dels[0][0], assetBlobStore.puts[0].pathname);
+    assert.equal(dels[0][1].token, env.CREATOR_ASSET_BLOB_READ_WRITE_TOKEN);
+    dels.length = 0;
+    assert.equal((await persistGeneratedAsset({ ...args, blobStore })).created, true);
+    assert.equal((await persistGeneratedAsset({ ...args, blobStore })).created, false);
+    assert.equal(dels.length, 0);
+});
+
+test('invalid generation records are rejected with 400 before any work', async () => {
+    const { blobStore, assetBlobStore } = await setup();
+    const fetchImpl = () => { throw new Error('must not fetch'); };
+    const bad = [
+        { ...record, jobId: '../x' },
+        { ...record, jobId: 'a' },
+        { ...record, jobId: 'a'.repeat(61) },
+        { ...record, kind: 'audio' },
+        { ...record, mock: true },
+        { ...record, jobId: 'mock_abc', mock: false },
+    ];
+    for (const badRecord of bad) {
+        await assert.rejects(
+            persistGeneratedAsset({ user: owner, projectId, record: badRecord, outputUrl: 'https://replicate.delivery/a.png', env, fetchImpl, assetBlobStore, blobStore }),
+            (e) => e instanceof PersistError && e.status === 400 && e.code === 'invalid_record',
+            JSON.stringify(badRecord),
+        );
+    }
+    assert.equal(assetBlobStore.puts.length, 0);
+});
