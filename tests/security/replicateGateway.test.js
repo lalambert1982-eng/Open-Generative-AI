@@ -417,3 +417,193 @@ test('a timeout cancellation that still reports processing retains reserved spen
     assert.equal(response.status, 200);
     assert.equal(ledger(ctx.blobStore, ctx.env, now).spentUsd, 0.003);
 });
+
+// --- Accepted-job recovery metadata (create succeeded, local storage failed) ---
+
+const isJobPath = (pathname) => pathname.includes('/jobs/');
+
+async function liveGenerateBody(opts, prompt, extra = {}) {
+    const input = { prompt };
+    const quote = await (await handleReplicateQuote(call('replicate/quote', { model, input }), opts)).json();
+    return { model, input, projectId, quoteToken: quote.quoteToken, ...extra };
+}
+
+function assertNoAcceptedMetadata(payload) {
+    for (const key of ['generationAccepted', 'jobId', 'jobRecordState', 'statusRecoveryAvailable']) {
+        assert.equal(Object.hasOwn(payload, key), false, `${key} must be absent`);
+    }
+}
+
+test('a mock upload failure returns a recoverable server job ID that polling can persist', async () => {
+    const ctx = await setup(baseEnv);
+    const put = ctx.assetBlobStore.put;
+    ctx.assetBlobStore.put = async () => { throw new Error('temporary upload outage'); };
+    const opts = { ...ctx, idGenerator: () => '44444444-4444-4444-8444-444444444444', fetchImpl: () => { throw new Error('no network in mock mode'); } };
+    const response = await handleReplicateGenerate(call('replicate/generate', { model, projectId, input: { prompt: 'mock recovery id' } }), opts);
+    assert.equal(response.status, 502);
+    const payload = await response.json();
+    assert.equal(payload.code, 'upload_failed');
+    assert.equal(payload.generationAccepted, true);
+    assert.equal(payload.jobRecordState, 'confirmed');
+    assert.equal(payload.statusRecoveryAvailable, true);
+    assert.equal(payload.retryable, false);
+    assert.match(payload.jobId, /^mock_/);
+    ctx.assetBlobStore.put = put;
+    const recovered = await handleReplicateStatus(call(`replicate/status?id=${payload.jobId}`), opts);
+    assert.equal(recovered.status, 200);
+    const job = (await recovered.json()).job;
+    assert.equal(job.jobId, payload.jobId);
+    assert.ok(job.asset.url);
+});
+
+test('an initial job-record write that never commits returns the accepted ID as unconfirmed and keeps spend', async () => {
+    const ctx = await setup(liveEnv);
+    const now = Date.now();
+    const { fetchImpl, log } = replicateFetch();
+    const opts = { ...ctx, now, fetchImpl };
+    const body = await liveGenerateBody(opts, 'unsaved record fox');
+    const put = ctx.blobStore.put;
+    ctx.blobStore.put = async (pathname, ...rest) => {
+        if (isJobPath(pathname)) throw new Error('job store down');
+        return put(pathname, ...rest);
+    };
+    const response = await handleReplicateGenerate(call('replicate/generate', body), opts);
+    assert.equal(response.status, 503);
+    const payload = await response.json();
+    assert.equal(payload.code, 'storage_unavailable');
+    assert.equal(payload.generationAccepted, true);
+    assert.equal(payload.jobId, predictionId);
+    assert.equal(payload.jobRecordState, 'unconfirmed');
+    assert.equal(payload.statusRecoveryAvailable, false);
+    assert.equal(payload.retryable, false);
+    assert.equal(ledger(ctx.blobStore, ctx.env, now).spentUsd, 0.003);
+    assert.equal((await handleReplicateGenerate(call('replicate/generate', body), opts)).status, 409);
+    assert.equal(log.creates, 1);
+    // No record exists, so the honest answer from status is still 404.
+    assert.equal((await handleReplicateStatus(call(`replicate/status?id=${payload.jobId}`), opts)).status, 404);
+});
+
+test('a job-record write that commits then throws is confirmed by an owner-bound read and can be polled', async () => {
+    const ctx = await setup(liveEnv);
+    const now = Date.now();
+    const { fetchImpl, log } = replicateFetch();
+    const opts = { ...ctx, now, fetchImpl };
+    const body = await liveGenerateBody(opts, 'unacknowledged record fox');
+    const put = ctx.blobStore.put;
+    let armed = true;
+    ctx.blobStore.put = async (pathname, ...rest) => {
+        const result = await put(pathname, ...rest);
+        if (armed && isJobPath(pathname)) {
+            armed = false;
+            throw new Error('acknowledgment lost');
+        }
+        return result;
+    };
+    const response = await handleReplicateGenerate(call('replicate/generate', body), opts);
+    assert.equal(response.status, 503);
+    const payload = await response.json();
+    assert.equal(payload.generationAccepted, true);
+    assert.equal(payload.jobId, predictionId);
+    assert.equal(payload.jobRecordState, 'confirmed');
+    assert.equal(payload.statusRecoveryAvailable, true);
+    assert.equal(payload.retryable, false);
+    assert.equal(ledger(ctx.blobStore, ctx.env, now).spentUsd, 0.003);
+    const polled = await handleReplicateStatus(call(`replicate/status?id=${payload.jobId}`), opts);
+    assert.equal(polled.status, 200);
+    const job = (await polled.json()).job;
+    assert.equal(job.status, 'completed');
+    assert.ok(job.asset.url);
+    assert.equal(log.creates, 1);
+    assert.equal(ledger(ctx.blobStore, ctx.env, now).spentUsd, 0.003);
+});
+
+test('a failing recovery read makes no recovery promise and leaks no storage detail', async () => {
+    const ctx = await setup(liveEnv);
+    const { fetchImpl } = replicateFetch();
+    const opts = { ...ctx, fetchImpl };
+    const body = await liveGenerateBody(opts, 'unreadable record fox');
+    const put = ctx.blobStore.put;
+    const get = ctx.blobStore.get;
+    const secret = 'SECRET-STORAGE-DETAIL-https://private.test/creator-generation';
+    ctx.blobStore.put = async (pathname, ...rest) => {
+        const result = await put(pathname, ...rest);
+        if (isJobPath(pathname)) throw new Error(secret);
+        return result;
+    };
+    ctx.blobStore.get = async (pathname, ...rest) => {
+        if (isJobPath(pathname)) throw new Error(secret);
+        return get(pathname, ...rest);
+    };
+    const response = await handleReplicateGenerate(call('replicate/generate', body), opts);
+    const text = await response.text();
+    const payload = JSON.parse(text);
+    assert.equal(payload.generationAccepted, true);
+    assert.equal(payload.jobId, predictionId);
+    assert.equal(payload.jobRecordState, 'unconfirmed');
+    assert.equal(payload.statusRecoveryAvailable, false);
+    assert.equal(payload.retryable, false);
+    for (const sensitive of [secret, 'SECRET-STORAGE-DETAIL', liveEnv.BLOB_READ_WRITE_TOKEN, liveEnv.REPLICATE_API_TOKEN]) {
+        assert.equal(text.includes(sensitive), false);
+    }
+});
+
+test('unknown and pre-submit failures never carry accepted-job metadata or echo a client job ID', async () => {
+    const ctx = await setup(liveEnv);
+    const now = Date.now();
+    const clientClaims = { jobId: 'client_chosen_id', generationAccepted: true, statusRecoveryAvailable: true };
+
+    // Unknown submit outcome: no valid provider ID was received.
+    const timeoutOpts = { ...ctx, now, fetchImpl: async () => { throw new DOMException('timeout', 'TimeoutError'); } };
+    const unknown = await handleReplicateGenerate(call('replicate/generate', await liveGenerateBody(timeoutOpts, 'unknown fox', clientClaims)), timeoutOpts);
+    assert.equal(unknown.status, 504);
+    const unknownPayload = await unknown.json();
+    assert.equal(unknownPayload.outcomeUnknown, true);
+    assertNoAcceptedMetadata(unknownPayload);
+
+    // A 2xx with no usable prediction ID is also unknown.
+    const noIdOpts = { ...ctx, now, fetchImpl: async () => new Response(JSON.stringify({ status: 'starting' }), { status: 201 }) };
+    const noId = await handleReplicateGenerate(call('replicate/generate', await liveGenerateBody(noIdOpts, 'no id fox', clientClaims)), noIdOpts);
+    assertNoAcceptedMetadata(await noId.json());
+
+    // Definite provider rejection.
+    const rejectOpts = { ...ctx, now, fetchImpl: async () => new Response(JSON.stringify({ detail: 'bad' }), { status: 422 }) };
+    const rejected = await handleReplicateGenerate(call('replicate/generate', await liveGenerateBody(rejectOpts, 'rejected fox', clientClaims)), rejectOpts);
+    assert.equal(rejected.status, 422);
+    assertNoAcceptedMetadata(await rejected.json());
+
+    // Pre-submit failures: validation, missing Project, missing quote.
+    const { fetchImpl } = replicateFetch();
+    const opts = { ...ctx, now, fetchImpl };
+    for (const body of [
+        { model, projectId: 'not-a-uuid', input: { prompt: 'x' }, ...clientClaims },
+        { model, projectId: '22222222-2222-4222-8222-222222222222', input: { prompt: 'x' }, ...clientClaims },
+        { model, projectId, input: { prompt: 'x' }, ...clientClaims },
+    ]) {
+        const response = await handleReplicateGenerate(call('replicate/generate', body), opts);
+        assert.ok(response.status >= 400);
+        assertNoAcceptedMetadata(await response.json());
+    }
+});
+
+test('a second owner cannot use a returned recovery ID', async () => {
+    const ctx = await setup(liveEnv);
+    const { fetchImpl, log } = replicateFetch();
+    const opts = { ...ctx, fetchImpl };
+    const body = await liveGenerateBody(opts, 'owner bound fox');
+    const put = ctx.blobStore.put;
+    let armed = true;
+    ctx.blobStore.put = async (pathname, ...rest) => {
+        const result = await put(pathname, ...rest);
+        if (armed && isJobPath(pathname)) {
+            armed = false;
+            throw new Error('acknowledgment lost');
+        }
+        return result;
+    };
+    const payload = await (await handleReplicateGenerate(call('replicate/generate', body), opts)).json();
+    assert.equal(payload.statusRecoveryAvailable, true);
+    assert.equal((await handleReplicateStatus(call(`replicate/status?id=${payload.jobId}`, undefined, other), opts)).status, 404);
+    assert.equal((await handleReplicateCancel(call('replicate/cancel', { id: payload.jobId }, other), opts)).status, 404);
+    assert.equal(log.cancels, 0);
+    assert.equal((await handleReplicateStatus(call(`replicate/status?id=${payload.jobId}`), opts)).status, 200);
+});

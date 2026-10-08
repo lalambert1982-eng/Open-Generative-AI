@@ -58,6 +58,37 @@ function errorResponse(error) {
     return creatorJson({ error: 'Generation request failed.' }, 500);
 }
 
+const ACCEPTED_JOB_ID_PATTERN = /^[A-Za-z0-9_-]{3,60}$/;
+
+// Used only after the provider accepted a job. `record` is built from the
+// provider response and server state, never from client input. Recovery is
+// promised only when an owner-bound read finds the matching record; a write may
+// have committed before its acknowledgment failed, and a read may fail too.
+async function acceptedJobFailure(error, user, record, { env, blobStore }) {
+    const known = error instanceof GenerationGuardError || error instanceof CreatorProjectError || error instanceof PersistError;
+    const jobId = String(record.jobId ?? '');
+    if (!ACCEPTED_JOB_ID_PATTERN.test(jobId)) return errorResponse(error);
+    let confirmed = false;
+    try {
+        const stored = await loadJobRecord(user, jobId, { env, blobStore });
+        confirmed = Boolean(stored)
+            && stored.jobId === jobId
+            && String(stored.userId) === String(user.id)
+            && stored.projectId === record.projectId;
+    } catch {
+        confirmed = false;
+    }
+    return creatorJson({
+        error: known ? error.message : 'Generation request failed.',
+        ...(known ? { code: error.code } : {}),
+        generationAccepted: true,
+        jobId,
+        jobRecordState: confirmed ? 'confirmed' : 'unconfirmed',
+        statusRecoveryAvailable: confirmed,
+        retryable: false,
+    }, known ? error.status : 500);
+}
+
 function clientJob(record) {
     return {
         provider: 'replicate',
@@ -234,7 +265,7 @@ export async function handleReplicateGenerate(request, {
         record = await withJobOperation(user, job.jobId, { env, blobStore }, () =>
             settle(user, record, job, { env, fetchImpl, blobStore, assetBlobStore, now }));
     } catch (error) {
-        return errorResponse(error);
+        return acceptedJobFailure(error, user, record, { env, blobStore });
     }
     return creatorJson({ job: clientJob(record) }, TERMINAL.has(record.status) ? 200 : 202);
 }
