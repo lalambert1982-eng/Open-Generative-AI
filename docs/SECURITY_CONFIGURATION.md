@@ -51,3 +51,18 @@ The built-in rate limiter is a per-process backstop. Multi-instance deployments 
 Electron/Vite builds apply the same policy before direct generation requests. Their compile-time settings are `VITE_CONTENT_SAFETY_MODE` and `VITE_CONTENT_SAFETY_BLOCKED_TERMS`; enforcement is still the default when those values are absent.
 
 The local rules are a minimum policy boundary, not a complete moderation system. Production deployments that accept untrusted public prompts should add a dedicated moderation service before the MuAPI proxy.
+
+## Replicate generation controls
+
+- Default is mock mode. Live generation needs `GENERATION_MODE=live`, `REPLICATE_LIVE_ENABLED=true` and `REPLICATE_API_TOKEN`; if any is missing the endpoints answer 503 and never fall back silently.
+- A live generation requires a signed quote from `POST /api/creator/replicate/quote`, bound to owner, model, exact input and estimated cost, valid for five minutes.
+- Per-generation (`REPLICATE_MAX_USD_PER_JOB`) and per-day (`REPLICATE_MAX_USD_PER_DAY`) caps are enforced server-side. The daily ledger is stored in private Blob without cross-request locking, so two simultaneous live requests from one owner could overshoot the daily cap by one job.
+- Identical requests within 60 seconds are rejected (duplicate lock).
+- Outputs are copied from `replicate.delivery` into the Asset store, because Replicate deletes outputs after about an hour.
+- There is no automatic retry and no cross-model or cross-provider fallback.
+- Prices in the model registry are estimates taken from model pages.
+- Webhooks are not implemented; clients poll `GET /api/creator/replicate/status`.
+
+- A submit timeout, network error, 5xx, or invalid response has an unknown outcome: a paid prediction may already exist. The API returns `outcomeUnknown: true` and `retryable: false`; reserved spend is retained and the duplicate lock remains until its 60-second expiry. Only definite submit rejections release the lock and refund spend.
+- Status and cancel operations are serialized per owner/job within a server process. This avoids duplicate downloads and refunds for overlapping requests in that process; it does not provide coordination across server instances.
+- Registry model IDs, input fields, enum values, and prices have not been verified against live Replicate schemas; verify them before enabling live generation.
