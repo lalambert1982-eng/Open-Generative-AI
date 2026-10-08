@@ -132,3 +132,95 @@ test('unconfigured storage fails closed', async () => {
         503,
     );
 });
+
+const badEstimates = [Number.NaN, undefined, -1, Number.POSITIVE_INFINITY];
+
+test('invalid estimates are rejected by reserve, quote and refund', async () => {
+    for (const mode of ['live', 'mock']) {
+        for (const estimateUsd of badEstimates) {
+            const records = new Map();
+            const blobStore = creatorProjectStoreForTests(records);
+            await expectCode(
+                reserveGeneration({ user: owner, env, blobStore, mode, modelId: model, input: { prompt: 'x' }, estimateUsd, quoteToken: 'x', limits, now }),
+                'invalid_estimate',
+                400,
+            );
+            assert.equal(records.size, 0);
+        }
+    }
+    for (const estimateUsd of badEstimates) {
+        assert.throws(() => issueQuote({ user: owner, env, modelId: model, input: { prompt: 'x' }, estimateUsd, now }), GenerationGuardError);
+        assert.equal(verifyQuote('1790000000000.abc', { user: owner, env, modelId: model, input: { prompt: 'x' }, estimateUsd, now }), false);
+        await expectCode(
+            refundSpend({ user: owner, env, blobStore: creatorProjectStoreForTests(new Map()), ledgerDay: '2026-10-08', estimateUsd }),
+            'invalid_estimate',
+            400,
+        );
+    }
+});
+
+test('a rejected live estimate does not touch the ledger', async () => {
+    const records = new Map();
+    const blobStore = creatorProjectStoreForTests(records);
+    const quoteToken = issueQuote({ user: owner, env, modelId: model, input: { prompt: 'x' }, estimateUsd: 0.1, now }).token;
+    await expectCode(
+        reserveGeneration({ user: owner, env, blobStore, mode: 'live', modelId: model, input: { prompt: 'x' }, estimateUsd: Number.NaN, quoteToken, limits, now }),
+        'invalid_estimate',
+        400,
+    );
+    assert.equal([...records.keys()].some((key) => key.includes('/ledger/')), false);
+});
+
+test('mode is whitelisted before any storage access', async () => {
+    for (const mode of ['LIVE', undefined, 'bogus', 'unconfigured']) {
+        const records = new Map();
+        const blobStore = creatorProjectStoreForTests(records);
+        await expectCode(
+            reserveGeneration({ user: owner, env, blobStore, mode, modelId: model, input: { prompt: 'x' }, estimateUsd: 0.01, limits, now }),
+            'invalid_mode',
+            400,
+        );
+        assert.equal(records.size, 0);
+    }
+});
+
+test('releaseGeneration ignores a tampered lockPath and ownerKey', async () => {
+    const records = new Map();
+    const blobStore = creatorProjectStoreForTests(records);
+    const args = { user: owner, env, blobStore, mode: 'mock', modelId: model, input: { prompt: 'fox' }, estimateUsd: 0.015, limits };
+    const reservation = await reserveGeneration({ ...args, now });
+    await releaseGeneration({
+        user: owner,
+        env,
+        blobStore,
+        reservation: { ...reservation, lockPath: 'creator-projects/evil.json', ownerKey: 'evil' },
+        now: now + 10,
+    });
+    assert.equal(records.has('creator-projects/evil.json'), false);
+    await reserveGeneration({ ...args, now: now + 20 });
+    await expectCode(
+        releaseGeneration({ user: owner, env, blobStore, reservation: { ...reservation, fingerprint: '../x' }, now }),
+        'invalid_reservation',
+        400,
+    );
+});
+
+test('malformed ledgerDay is rejected but null is a no-op', async () => {
+    const records = new Map();
+    const blobStore = creatorProjectStoreForTests(records);
+    await expectCode(refundSpend({ user: owner, env, blobStore, ledgerDay: '../x', estimateUsd: 0.1 }), 'invalid_ledger_day', 400);
+    await refundSpend({ user: owner, env, blobStore, ledgerDay: null, estimateUsd: 0.1 });
+    assert.equal(records.size, 0);
+});
+
+test('invalid limits are rejected', async () => {
+    for (const bad of [undefined, {}, { maxUsdPerJob: 1 }, { maxUsdPerJob: 0, maxUsdPerDay: 1 }, { maxUsdPerJob: 1, maxUsdPerDay: Number.NaN }, { maxUsdPerJob: -1, maxUsdPerDay: 1 }]) {
+        const records = new Map();
+        await expectCode(
+            reserveGeneration({ user: owner, env, blobStore: creatorProjectStoreForTests(records), mode: 'mock', modelId: model, input: { prompt: 'x' }, estimateUsd: 0.01, limits: bad, now }),
+            'invalid_limits',
+            500,
+        );
+        assert.equal(records.size, 0);
+    }
+});

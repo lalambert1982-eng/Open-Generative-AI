@@ -48,12 +48,19 @@ function quoteSignature(env, payload) {
     return createHmac('sha256', sessionSecret(env)).update(`generation-quote:${payload}`, 'utf8').digest('base64url');
 }
 
+function assertEstimate(estimateUsd) {
+    if (typeof estimateUsd !== 'number' || !Number.isFinite(estimateUsd) || estimateUsd < 0) {
+        throw new GenerationGuardError('invalid_estimate', 'Estimated cost is invalid.', 400);
+    }
+}
+
 function quotePayload({ user, env, modelId, input, estimateUsd }, expiresAt) {
     const fingerprint = requestFingerprint(generationOwnerKey(user, env), modelId, input);
     return `${fingerprint}.${Number(estimateUsd).toFixed(4)}.${expiresAt}`;
 }
 
 export function issueQuote({ user, env, modelId, input, estimateUsd, now = Date.now() }) {
+    assertEstimate(estimateUsd);
     const expiresAt = now + QUOTE_TTL_MS;
     const signature = quoteSignature(env, quotePayload({ user, env, modelId, input, estimateUsd }, expiresAt));
     return { token: `${expiresAt}.${signature}`, estimateUsd, expiresAt };
@@ -61,6 +68,7 @@ export function issueQuote({ user, env, modelId, input, estimateUsd, now = Date.
 
 export function verifyQuote(token, { user, env, modelId, input, estimateUsd, now = Date.now() }) {
     if (typeof token !== 'string') return false;
+    if (typeof estimateUsd !== 'number' || !Number.isFinite(estimateUsd) || estimateUsd < 0) return false;
     const separator = token.indexOf('.');
     if (separator < 1) return false;
     const expiresAtText = token.slice(0, separator);
@@ -129,6 +137,14 @@ export async function reserveGeneration({
     limits,
     now = Date.now(),
 }) {
+    if (mode !== 'live' && mode !== 'mock') {
+        throw new GenerationGuardError('invalid_mode', 'Generation mode is invalid.', 400);
+    }
+    assertEstimate(estimateUsd);
+    const validLimit = (value) => typeof value === 'number' && Number.isFinite(value) && value > 0;
+    if (!validLimit(limits?.maxUsdPerJob) || !validLimit(limits?.maxUsdPerDay)) {
+        throw new GenerationGuardError('invalid_limits', 'Generation limits are not configured correctly.', 500);
+    }
     const ownerKey = generationOwnerKey(user, env);
     if (estimateUsd > limits.maxUsdPerJob) {
         throw new GenerationGuardError('job_limit', 'Estimated cost exceeds the per-generation limit.', 402);
@@ -172,6 +188,10 @@ export async function reserveGeneration({
 
 export async function refundSpend({ user, env, blobStore, ledgerDay, estimateUsd }) {
     if (!ledgerDay) return;
+    if (typeof ledgerDay !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(ledgerDay)) {
+        throw new GenerationGuardError('invalid_ledger_day', 'Ledger day is invalid.', 400);
+    }
+    assertEstimate(estimateUsd);
     const store = storeAccess(env, blobStore);
     const path = `${ROOT}/${generationOwnerKey(user, env)}/ledger/${ledgerDay}.json`;
     const ledger = await store.read(path);
@@ -181,8 +201,13 @@ export async function refundSpend({ user, env, blobStore, ledgerDay, estimateUsd
 }
 
 export async function releaseGeneration({ user, env, blobStore, reservation, now = Date.now() }) {
+    const fingerprint = reservation?.fingerprint;
+    if (typeof fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(fingerprint)) {
+        throw new GenerationGuardError('invalid_reservation', 'Reservation is invalid.', 400);
+    }
+    const lockPath = `${ROOT}/${generationOwnerKey(user, env)}/locks/${fingerprint}.json`;
     const store = storeAccess(env, blobStore);
-    await store.write(reservation.lockPath, { expiresAt: now - 1 });
+    await store.write(lockPath, { expiresAt: now - 1 });
     await refundSpend({ user, env, blobStore, ledgerDay: reservation.ledgerDay, estimateUsd: reservation.estimateUsd });
 }
 
