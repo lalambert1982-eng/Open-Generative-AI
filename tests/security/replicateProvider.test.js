@@ -116,7 +116,8 @@ test('provider failures are normalized and never leak the token', async () => {
     assert.equal(credit.status, 402);
     const down = await submitReplicateJob(prepared, { env: liveEnv, fetchImpl: async () => { throw new Error('boom'); } });
     assert.equal(down.status, 502);
-    assert.equal(down.retryable, true);
+    assert.equal(down.retryable, false);
+    assert.equal(down.outcomeUnknown, true);
 });
 
 test('get maps terminal states and takes the first array output', async () => {
