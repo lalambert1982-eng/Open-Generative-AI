@@ -563,7 +563,10 @@ test('unknown and pre-submit failures never carry accepted-job metadata or echo 
     // A 2xx with no usable prediction ID is also unknown.
     const noIdOpts = { ...ctx, now, fetchImpl: async () => new Response(JSON.stringify({ status: 'starting' }), { status: 201 }) };
     const noId = await handleReplicateGenerate(call('replicate/generate', await liveGenerateBody(noIdOpts, 'no id fox', clientClaims)), noIdOpts);
-    assertNoAcceptedMetadata(await noId.json());
+    assert.equal(noId.status, 502);
+    const noIdPayload = await noId.json();
+    assert.equal(noIdPayload.outcomeUnknown, true);
+    assertNoAcceptedMetadata(noIdPayload);
 
     // Definite provider rejection.
     const rejectOpts = { ...ctx, now, fetchImpl: async () => new Response(JSON.stringify({ detail: 'bad' }), { status: 422 }) };
@@ -606,4 +609,59 @@ test('a second owner cannot use a returned recovery ID', async () => {
     assert.equal((await handleReplicateCancel(call('replicate/cancel', { id: payload.jobId }, other), opts)).status, 404);
     assert.equal(log.cancels, 0);
     assert.equal((await handleReplicateStatus(call(`replicate/status?id=${payload.jobId}`), opts)).status, 200);
+});
+
+test('a live download failure after acceptance returns a confirmed recoverable job and keeps spend', async () => {
+    const ctx = await setup(liveEnv);
+    const now = Date.now();
+    const fetchImpl = async (url, options = {}) => {
+        if (url.endsWith('/predictions') && options.method === 'POST') {
+            return new Response(JSON.stringify({ id: predictionId, status: 'succeeded', output: ['https://replicate.delivery/out.png'] }), { status: 201 });
+        }
+        throw new Error('output host down');
+    };
+    const opts = { ...ctx, now, fetchImpl };
+    const response = await handleReplicateGenerate(call('replicate/generate', await liveGenerateBody(opts, 'download outage fox')), opts);
+    assert.equal(response.status, 502);
+    const payload = await response.json();
+    assert.equal(payload.code, 'download_failed');
+    assert.equal(payload.generationAccepted, true);
+    assert.equal(payload.jobId, predictionId);
+    assert.equal(payload.jobRecordState, 'confirmed');
+    assert.equal(payload.statusRecoveryAvailable, true);
+    assert.equal(payload.retryable, false);
+    assert.equal(ledger(ctx.blobStore, ctx.env, now).spentUsd, 0.003);
+});
+
+test('a refund followed by a failed settled-record save stays recoverable and refunds only once', async () => {
+    const ctx = await setup(liveEnv);
+    const now = Date.now();
+    const fetchImpl = async (url, options = {}) => {
+        if (url.endsWith('/predictions') && options.method === 'POST') {
+            return new Response(JSON.stringify({ id: predictionId, status: 'failed', error: 'provider failed' }), { status: 201 });
+        }
+        return new Response(JSON.stringify({ id: predictionId, status: 'failed', error: 'provider failed' }), { status: 200 });
+    };
+    const opts = { ...ctx, now, fetchImpl };
+    const body = await liveGenerateBody(opts, 'refunded then unsaved fox');
+    const put = ctx.blobStore.put;
+    let armed = true;
+    ctx.blobStore.put = async (pathname, data, options) => {
+        if (armed && isJobPath(pathname) && JSON.parse(data).refunded === true) {
+            armed = false;
+            throw new Error('settled save failed');
+        }
+        return put(pathname, data, options);
+    };
+    const response = await handleReplicateGenerate(call('replicate/generate', body), opts);
+    assert.equal(response.status, 503);
+    const payload = await response.json();
+    assert.equal(payload.generationAccepted, true);
+    assert.equal(payload.jobId, predictionId);
+    assert.equal(payload.statusRecoveryAvailable, true);
+    assert.equal(ledger(ctx.blobStore, ctx.env, now).spentUsd, 0);
+    const polled = await handleReplicateStatus(call(`replicate/status?id=${payload.jobId}`), opts);
+    assert.equal(polled.status, 200);
+    assert.equal((await polled.json()).job.status, 'failed');
+    assert.equal(ledger(ctx.blobStore, ctx.env, now).spentUsd, 0);
 });

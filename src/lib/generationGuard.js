@@ -3,7 +3,7 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 const ROOT = 'creator-generation';
 const LOCK_TTL_MS = 60 * 1000;
 const QUOTE_TTL_MS = 5 * 60 * 1000;
-const JOB_ID_PATTERN = /^[A-Za-z0-9_-]{3,60}$/;
+export const JOB_ID_PATTERN = /^[A-Za-z0-9_-]{3,60}$/;
 
 export class GenerationGuardError extends Error {
     constructor(code, message, status = 400) {

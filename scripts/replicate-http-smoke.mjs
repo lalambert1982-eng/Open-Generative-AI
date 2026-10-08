@@ -44,7 +44,6 @@ const assetBlobStore = {
     async del(pathname) { media.delete(pathname); },
 };
 let counter = 0;
-let lastId;
 let stubCalls = 0;
 let forbiddenFetches = 0;
 let providerBehavior = 'never';
@@ -53,8 +52,7 @@ const ctx = {
     env, blobStore, assetBlobStore,
     idGenerator() {
         counter += 1;
-        lastId = `11111111-1111-4111-8111-${String(counter).padStart(12, '0')}`;
-        return lastId;
+        return `11111111-1111-4111-8111-${String(counter).padStart(12, '0')}`;
     },
     async fetchImpl(url, options = {}) {
         stubCalls += 1;

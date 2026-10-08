@@ -9,6 +9,7 @@ import {
 } from './creatorProjectStore.js';
 import {
     GenerationGuardError,
+    JOB_ID_PATTERN,
     generationOwnerKey,
     issueQuote,
     loadJobRecord,
@@ -58,8 +59,6 @@ function errorResponse(error) {
     return creatorJson({ error: 'Generation request failed.' }, 500);
 }
 
-const ACCEPTED_JOB_ID_PATTERN = /^[A-Za-z0-9_-]{3,60}$/;
-
 // Used only after the provider accepted a job. `record` is built from the
 // provider response and server state, never from client input. Recovery is
 // promised only when an owner-bound read finds the matching record; a write may
@@ -67,7 +66,7 @@ const ACCEPTED_JOB_ID_PATTERN = /^[A-Za-z0-9_-]{3,60}$/;
 async function acceptedJobFailure(error, user, record, { env, blobStore }) {
     const known = error instanceof GenerationGuardError || error instanceof CreatorProjectError || error instanceof PersistError;
     const jobId = String(record.jobId ?? '');
-    if (!ACCEPTED_JOB_ID_PATTERN.test(jobId)) return errorResponse(error);
+    if (!JOB_ID_PATTERN.test(jobId)) return errorResponse(error);
     let confirmed = false;
     try {
         const stored = await loadJobRecord(user, jobId, { env, blobStore });
