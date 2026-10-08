@@ -1,8 +1,10 @@
 # Replicate Creator Studio: UI follow-up design
 
-Status: proposed for review. No UI implementation has started.
+Status: proposed for review, updated for the delivered backend contract.
+No UI implementation has started.
 
-Base: `rebuild/creator-studio-replicate`, backend complete through `613bb53`.
+Base: `rebuild/creator-studio-replicate`, backend complete through `887a858`
+(including the accepted-job error contract).
 Parent design: `2026-10-08-creator-studio-replicate-design.md`.
 The backend handoff rulings and subsequent storage/spend fixes remain binding.
 
@@ -128,7 +130,7 @@ promise of Replicate-style zero-network mock behavior. No live MuAPI testing
 or credential setup is included here. Selena may prefill a draft or navigate
 to a Studio, but must not submit a generation.
 
-## Error handling and one backend dependency
+## Error handling
 
 - Authentication loss stops polling and clears owner-specific job/result state.
   A newly signed-in owner must not inherit another owner's pending UI state.
@@ -142,14 +144,35 @@ to a Studio, but must not submit a generation.
 - Disabled/unconfigured providers show readiness guidance and disable Generate.
   There is no silent mock or cross-provider fallback.
 
-Current backend gap: when create succeeds but persistence/job-record storage
-fails, `handleReplicateGenerate` returns an error without the known job ID.
-The API smoke test recovered a mock job using a deterministic fixture ID; a
-browser user cannot derive that ID. Before implementing create-error recovery,
-agree with the backend owner on a response carrying the sanitized known job
-identity, whether the job record was stored, and whether status recovery is
-available. Do not claim recovery for an unstored job that would return 404.
-This is separate from a submit timeout where no provider ID was received.
+### Accepted-job error contract (backend delivered in `94e8049`, `887a858`)
+
+If Replicate accepted the job but the job record or Asset could not be stored,
+`generate` returns the original `error`, `code` and HTTP status plus:
+`generationAccepted: true`, `jobId` (server-produced), `jobRecordState`
+(`"confirmed"` | `"unconfirmed"`), `statusRecoveryAvailable` (boolean) and
+`retryable: false`. These fields are absent on pre-submit failures, definite
+provider rejections, and unknown submits with no provider ID (those carry
+`outcomeUnknown: true` instead). Full contract: `docs/SECURITY_CONFIGURATION.md`.
+
+Client rules:
+
+- Branch on `generationAccepted` before the HTTP status. A 404 or 409 can
+  accompany a valid `jobId`.
+- `statusRecoveryAvailable: true`: adopt `jobId` as the active job and poll
+  status. Show a saving-problem notice, not a failure. Never POST again.
+- `generationAccepted: true` with `statusRecoveryAvailable: false`: show the
+  `jobId` and an explicit uncertain state. Offer one "Check status" action
+  that may return 404; treat 404 as "not recorded", not "nothing generated".
+  Keep Generate disabled for that request until the user acknowledges the
+  uncertainty, and say operator review is needed before resubmitting. The
+  spend reservation is kept and the server duplicate lock lapses after 60s.
+- `retryable: false` means there is no Retry-generation control anywhere.
+- `outcomeUnknown: true` without a `jobId`: no status check is possible.
+  Same uncertain-state rules as above, without a job ID shown.
+- A confirmed job whose record is later found failed or refunded displays the
+  server's returned state; the UI does not infer spend or refund itself.
+- Known limitation: an unconfirmed job leaves no server-side trace and cannot
+  be polled or cancelled later.
 
 ## Acceptance and verification
 
@@ -186,7 +209,7 @@ and multi-instance atomicity remain unverified/deferred.
 
 ## Next implementation sequence, after design review
 
-1. Agree on Claude/Codex file ownership and resolve the known-job error contract.
+1. Agree on Claude/Codex file ownership (the known-job error contract is now delivered).
 2. Write the detailed TDD plan for the client/controller and schema form.
 3. Implement Image and Video using the shared focused component.
 4. Wire Project refresh/receipt and guard against selection/owner changes.
