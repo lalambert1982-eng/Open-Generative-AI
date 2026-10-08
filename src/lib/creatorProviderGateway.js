@@ -160,7 +160,7 @@ export function authorizeCreatorRequest(request, {
     return { user: authentication.user };
 }
 
-async function parseCreatorJson(request, { env = process.env, maxBytes = MAX_JSON_BODY_BYTES } = {}) {
+export async function parseCreatorJson(request, { env = process.env, maxBytes = MAX_JSON_BODY_BYTES } = {}) {
     const declaredLength = Number(request.headers.get('content-length') || 0);
     if (declaredLength > maxBytes) {
         return { response: creatorJson({ error: 'Request body is too large.' }, 413) };

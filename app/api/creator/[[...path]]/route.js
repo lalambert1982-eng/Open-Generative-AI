@@ -17,6 +17,14 @@ import {
 } from '../../../../src/lib/creatorProviderGateway.js';
 import { handleCreatorProjectRoute } from '../../../../src/lib/creatorProjectRoutes.js';
 
+import {
+    handleReplicateCancel,
+    handleReplicateGenerate,
+    handleReplicateModels,
+    handleReplicateQuote,
+    handleReplicateStatus,
+} from '../../../../src/lib/replicateGateway.js';
+
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
@@ -59,6 +67,16 @@ async function dispatch(request, context, method) {
             return handleCreatorAgentStatus(request);
         case 'GET:agents/conversation':
             return handleCreatorAgentConversation(request);
+        case 'GET:replicate/models':
+            return handleReplicateModels(request);
+        case 'POST:replicate/quote':
+            return handleReplicateQuote(request);
+        case 'POST:replicate/generate':
+            return handleReplicateGenerate(request);
+        case 'GET:replicate/status':
+            return handleReplicateStatus(request);
+        case 'POST:replicate/cancel':
+            return handleReplicateCancel(request);
         default:
             return creatorNotFound();
     }
