@@ -288,3 +288,132 @@ test('cancel stops a live job once and bad requests are rejected', async () => {
     assert.equal((await handleReplicateGenerate(call('replicate/generate', { model: 'evil/model', projectId, input: { prompt: 'x' } }), opts)).status, 400);
     assert.equal((await handleReplicateGenerate(call('replicate/generate', { model, projectId: 'not-a-uuid', input: { prompt: 'x' } }), opts)).status, 400);
 });
+
+test('a successful paid job keeps spend through an upload outage and can persist on a later poll', async () => {
+    const ctx = await setup(liveEnv);
+    const now = Date.now();
+    const { fetchImpl, log } = replicateFetch();
+    const opts = { ...ctx, now, fetchImpl };
+    const input = { prompt: 'recoverable fox' };
+    const quote = await (await handleReplicateQuote(call('replicate/quote', { model, input }), opts)).json();
+    await handleReplicateGenerate(call('replicate/generate', { model, projectId, input, quoteToken: quote.quoteToken }), opts);
+    const put = ctx.assetBlobStore.put;
+    ctx.assetBlobStore.put = async () => { throw new Error('temporary upload outage'); };
+    const unavailable = await handleReplicateStatus(call(`replicate/status?id=${predictionId}`), opts);
+    assert.equal(unavailable.status, 502);
+    assert.equal((await unavailable.json()).code, 'upload_failed');
+    assert.equal(ledger(ctx.blobStore, ctx.env, now).spentUsd, 0.003);
+    ctx.assetBlobStore.put = put;
+    const recovered = await handleReplicateStatus(call(`replicate/status?id=${predictionId}`), opts);
+    assert.equal(recovered.status, 200);
+    const job = (await recovered.json()).job;
+    assert.equal(job.status, 'completed');
+    assert.ok(job.asset.url);
+    assert.equal(ledger(ctx.blobStore, ctx.env, now).spentUsd, 0.003);
+    assert.equal(log.creates, 1);
+});
+
+test('succeeded predictions with unusable outputs retain paid spend without persisting', async () => {
+    for (const output of [null, [], ['http://replicate.delivery/out.png'], ['https://evil.test/out.png']]) {
+        const ctx = await setup(liveEnv);
+        const now = Date.now();
+        const { fetchImpl, log } = replicateFetch({ output });
+        const opts = { ...ctx, now, fetchImpl };
+        const input = { prompt: 'invalid output fox' };
+        const quote = await (await handleReplicateQuote(call('replicate/quote', { model, input }), opts)).json();
+        await handleReplicateGenerate(call('replicate/generate', { model, projectId, input, quoteToken: quote.quoteToken }), opts);
+        const job = (await (await handleReplicateStatus(call(`replicate/status?id=${predictionId}`), opts)).json()).job;
+        assert.equal(job.status, 'failed');
+        assert.equal(ledger(ctx.blobStore, ctx.env, now).spentUsd, 0.003);
+        assert.equal(ctx.assetBlobStore.puts.length, 0);
+        assert.equal(log.downloads, 0);
+    }
+});
+
+test('a refund is not repeated when saving the settled job record fails', async () => {
+    const ctx = await setup(liveEnv);
+    const now = Date.now();
+    const { fetchImpl: providerFetch } = replicateFetch({ status: 'failed', output: null });
+    let creates = 0;
+    const fetchImpl = async (url, options = {}) => {
+        if (url.endsWith('/predictions') && options.method === 'POST') {
+            creates += 1;
+            return new Response(JSON.stringify({ id: `${predictionId}${creates}`, status: 'starting' }), { status: 201 });
+        }
+        return providerFetch(url, options);
+    };
+    const opts = { ...ctx, now, fetchImpl };
+    for (const prompt of ['one reservation', 'another reservation']) {
+        const input = { prompt };
+        const quote = await (await handleReplicateQuote(call('replicate/quote', { model, input }), opts)).json();
+        assert.equal((await handleReplicateGenerate(call('replicate/generate', { model, projectId, input, quoteToken: quote.quoteToken }), opts)).status, 202);
+    }
+    assert.equal(ledger(ctx.blobStore, ctx.env, now).spentUsd, 0.006);
+    const put = ctx.blobStore.put;
+    let fail = true;
+    ctx.blobStore.put = async (pathname, body, options) => {
+        if (fail && pathname.includes('/jobs/') && JSON.parse(body).refunded === true) {
+            fail = false;
+            throw new Error('job save failed');
+        }
+        return put(pathname, body, options);
+    };
+    const request = () => call(`replicate/status?id=${predictionId}1`);
+    assert.equal((await handleReplicateStatus(request(), opts)).status, 503);
+    assert.equal(ledger(ctx.blobStore, ctx.env, now).spentUsd, 0.003);
+    assert.equal((await handleReplicateStatus(request(), opts)).status, 200);
+    assert.equal(ledger(ctx.blobStore, ctx.env, now).spentUsd, 0.003);
+});
+
+test('terminal live submit results settle immediately with errors, refunds, and persisted assets', async () => {
+    for (const status of ['failed', 'canceled', 'succeeded']) {
+        const ctx = await setup(liveEnv);
+        const now = Date.now();
+        const fetchImpl = async (url, options = {}) => {
+            if (url.endsWith('/predictions') && options.method === 'POST') {
+                return new Response(JSON.stringify({ id: predictionId, status, error: status === 'failed' ? 'provider failed' : null, output: status === 'succeeded' ? ['https://replicate.delivery/out.png'] : null }), { status: 201 });
+            }
+            assert.equal(url, 'https://replicate.delivery/out.png');
+            return new Response('png-bytes', { headers: { 'content-type': 'image/png' } });
+        };
+        const opts = { ...ctx, now, fetchImpl };
+        const input = { prompt: 'terminal fox' };
+        const quote = await (await handleReplicateQuote(call('replicate/quote', { model, input }), opts)).json();
+        const response = await handleReplicateGenerate(call('replicate/generate', { model, projectId, input, quoteToken: quote.quoteToken }), opts);
+        assert.equal(response.status, 200);
+        const job = (await response.json()).job;
+        assert.equal(job.status, status === 'succeeded' ? 'completed' : status);
+        if (status === 'failed') assert.equal(job.error, 'provider failed');
+        assert.equal(Boolean(job.asset), status === 'succeeded');
+        assert.equal(ledger(ctx.blobStore, ctx.env, now).spentUsd, status === 'succeeded' ? 0.003 : 0);
+    }
+});
+
+test('mock persistence can recover from an upload outage without any provider fetch', async () => {
+    const ctx = await setup(baseEnv);
+    const put = ctx.assetBlobStore.put;
+    ctx.assetBlobStore.put = async () => { throw new Error('temporary upload outage'); };
+    const opts = { ...ctx, idGenerator: () => '33333333-3333-4333-8333-333333333333', fetchImpl: () => { throw new Error('no network in mock mode'); } };
+    const response = await handleReplicateGenerate(call('replicate/generate', { model, projectId, input: { prompt: 'mock recovery' } }), opts);
+    assert.equal(response.status, 502);
+    ctx.assetBlobStore.put = put;
+    const recovered = await handleReplicateStatus(call('replicate/status?id=mock_33333333-3333-4333-8333-333333333333'), opts);
+    assert.equal(recovered.status, 200);
+    assert.ok((await recovered.json()).job.asset.url);
+});
+
+test('a timeout cancellation that still reports processing retains reserved spend', async () => {
+    const ctx = await setup({ ...liveEnv, REPLICATE_JOB_TIMEOUT_MS: '60000' });
+    const now = Date.now();
+    const { fetchImpl: providerFetch } = replicateFetch();
+    const fetchImpl = async (url, options) => url.endsWith('/cancel')
+        ? new Response(JSON.stringify({ id: predictionId, status: 'processing' }))
+        : providerFetch(url, options);
+    const opts = { ...ctx, now, fetchImpl };
+    const input = { prompt: 'pending cancellation' };
+    const quote = await (await handleReplicateQuote(call('replicate/quote', { model, input }), opts)).json();
+    await handleReplicateGenerate(call('replicate/generate', { model, projectId, input, quoteToken: quote.quoteToken }), opts);
+    const response = await handleReplicateStatus(call(`replicate/status?id=${predictionId}`), { ...opts, now: now + 61_000 });
+    assert.equal(response.status, 200);
+    assert.equal(ledger(ctx.blobStore, ctx.env, now).spentUsd, 0.003);
+});

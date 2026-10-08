@@ -212,12 +212,12 @@ export async function handleReplicateGenerate(request, {
     }
 
     const job = submitted.job;
-    const record = {
+    let record = {
         jobId: job.jobId,
         model: job.model,
         kind: job.kind,
         mock: job.mock,
-        status: job.status,
+        status: 'queued',
         projectId,
         userId: String(user.id),
         prompt: String(prepared.input.prompt).slice(0, 200),
@@ -231,15 +231,12 @@ export async function handleReplicateGenerate(request, {
     };
     try {
         await saveJobRecord(user, record, { env, blobStore });
-        if (job.mock) {
-            record.asset = await persistIfComplete(user, record, null, { env, fetchImpl, blobStore, assetBlobStore, now });
-            record.updatedAt = now;
-            await saveJobRecord(user, record, { env, blobStore });
-        }
+        record = await withJobOperation(user, job.jobId, { env, blobStore }, () =>
+            settle(user, record, job, { env, fetchImpl, blobStore, assetBlobStore, now }));
     } catch (error) {
         return errorResponse(error);
     }
-    return creatorJson({ job: clientJob(record) }, job.mock ? 200 : 202);
+    return creatorJson({ job: clientJob(record) }, TERMINAL.has(record.status) ? 200 : 202);
 }
 
 async function settle(user, record, providerJob, { env, fetchImpl, blobStore, assetBlobStore, now }) {
@@ -248,15 +245,16 @@ async function settle(user, record, providerJob, { env, fetchImpl, blobStore, as
         try {
             next.asset = await persistIfComplete(user, next, providerJob.outputUrl, { env, fetchImpl, blobStore, assetBlobStore, now });
         } catch (error) {
-            if (!(error instanceof PersistError) || error.status === 503) throw error;
+            if (!(error instanceof PersistError) || error.status === 503
+                || ['download_failed', 'upload_failed'].includes(error.code)) throw error;
             next.status = 'failed';
             next.error = error.message;
         }
     } else if (providerJob.status === 'failed') {
         next.error = providerJob.error || 'Generation failed.';
     }
-    if ((next.status === 'failed' || next.status === 'canceled') && !next.refunded) {
-        await refundSpend({ user, env, blobStore, ledgerDay: next.ledgerDay, estimateUsd: next.estimateUsd });
+    if ((next.status === 'failed' || next.status === 'canceled') && providerJob.refundable === true && !next.refunded) {
+        await refundSpend({ user, env, blobStore, ledgerDay: next.ledgerDay, estimateUsd: next.estimateUsd, refundId: next.jobId });
         next.refunded = true;
     }
     await saveJobRecord(user, next, { env, blobStore });
@@ -280,7 +278,10 @@ export async function handleReplicateStatus(request, {
             if (TERMINAL.has(record.status) && (record.asset || record.status !== 'completed')) {
                 return creatorJson({ job: clientJob(record) });
             }
-            if (record.mock) return creatorJson({ job: clientJob(record) });
+            if (record.mock) {
+                const next = await settle(auth.user, record, { status: 'completed', outputUrl: null }, { env, fetchImpl, blobStore, assetBlobStore, now });
+                return creatorJson({ job: clientJob(next) });
+            }
 
             const config = replicateConfiguration(env);
             const timedOut = now - record.createdAt > config.jobTimeoutMs;

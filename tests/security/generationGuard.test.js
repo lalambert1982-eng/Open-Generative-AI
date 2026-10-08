@@ -224,3 +224,54 @@ test('invalid limits are rejected', async () => {
         assert.equal(records.size, 0);
     }
 });
+
+test('corrupt or malformed spend ledgers fail closed before any reservation write', async () => {
+    const day = '2026-10-08';
+    const path = `creator-generation/${generationOwnerKey(owner, env)}/ledger/${day}.json`;
+    const badLedgers = [
+        '{bad-json', 'null', '[]',
+        JSON.stringify({ day, jobs: 1 }),
+        JSON.stringify({ day, jobs: 1, spentUsd: '0.5' }),
+        JSON.stringify({ day, jobs: 1, spentUsd: -1 }),
+        `{"day":"${day}","jobs":1,"spentUsd":1e400}`,
+        JSON.stringify({ day: '2026-10-07', jobs: 1, spentUsd: 0.5 }),
+        JSON.stringify({ day, jobs: -1, spentUsd: 0.5 }),
+    ];
+    for (const body of badLedgers) {
+        const blobStore = creatorProjectStoreForTests(new Map());
+        await blobStore.put(path, body);
+        const before = blobStore.records.get(path).bytes.toString();
+        const input = { prompt: 'corrupt ledger fox' };
+        const quoteToken = issueQuote({ user: owner, env, modelId: model, input, estimateUsd: 0.6, now }).token;
+        await expectCode(reserveGeneration({ user: owner, env, blobStore, mode: 'live', modelId: model, input, estimateUsd: 0.6, quoteToken, limits, now }), 'storage_unavailable', 503);
+        assert.equal(blobStore.records.size, 1);
+        assert.equal(blobStore.records.get(path).bytes.toString(), before);
+        await expectCode(refundSpend({ user: owner, env, blobStore, ledgerDay: day, estimateUsd: 0.6, refundId: 'failed_prediction' }), 'storage_unavailable', 503);
+        assert.equal(blobStore.records.get(path).bytes.toString(), before);
+    }
+});
+
+test('a refund whose ledger write commits before throwing is idempotent by job ID', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    for (const prompt of ['one', 'two']) {
+        const input = { prompt };
+        const quoteToken = issueQuote({ user: owner, env, modelId: model, input, estimateUsd: 0.3, now }).token;
+        await reserveGeneration({ user: owner, env, blobStore, mode: 'live', modelId: model, input, estimateUsd: 0.3, quoteToken, limits, now });
+    }
+    const ledgerPath = [...blobStore.records.keys()].find((path) => path.includes('/ledger/'));
+    const put = blobStore.put;
+    let fail = true;
+    blobStore.put = async (pathname, body, options) => {
+        const result = await put(pathname, body, options);
+        if (fail && pathname === ledgerPath) {
+            fail = false;
+            throw new Error('ledger committed but acknowledgment lost');
+        }
+        return result;
+    };
+    const args = { user: owner, env, blobStore, ledgerDay: '2026-10-08', estimateUsd: 0.3, refundId: 'failed_prediction' };
+    await expectCode(refundSpend(args), 'storage_unavailable', 503);
+    assert.equal(JSON.parse(blobStore.records.get(ledgerPath).bytes).spentUsd, 0.3);
+    await refundSpend(args);
+    assert.equal(JSON.parse(blobStore.records.get(ledgerPath).bytes).spentUsd, 0.3);
+});

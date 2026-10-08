@@ -204,7 +204,8 @@ function toolIdFor(model) {
 
 function publicJob(model, value, apiKey) {
     const id = normalizedString(value?.id);
-    let status = STATUS[normalizedString(value?.status).toLowerCase()] || 'queued';
+    const providerStatus = normalizedString(value?.status).toLowerCase();
+    let status = STATUS[providerStatus] || 'queued';
     const outputUrl = status === 'completed' ? firstOutputUrl(value?.output) : null;
     let error = null;
     if (status === 'completed' && !outputUrl) {
@@ -224,6 +225,9 @@ function publicJob(model, value, apiKey) {
         mode: 'live',
         mock: false,
         error,
+        // A local validation failure after provider success does not undo its
+        // paid generation. Only explicit provider failure/cancellation refunds.
+        refundable: ['failed', 'canceled', 'aborted'].includes(providerStatus),
     };
 }
 

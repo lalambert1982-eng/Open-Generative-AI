@@ -1,6 +1,7 @@
 import { isIP } from 'node:net';
 
 import {
+    CreatorProjectError,
     addCreatorAsset,
     creatorAssetStorageConfiguration,
     creatorAssetUploadPrefix,
@@ -172,8 +173,22 @@ export async function persistGeneratedAsset({
             provider: { provider: 'replicate', model: record.model, jobId: record.jobId },
         }, { env, blobStore, now, ...(idGenerator ? { idGenerator } : {}) });
     } catch (error) {
-        // Nothing references the blob yet; remove it and surface the original failure.
-        await Promise.resolve(assetBlobStore.del?.(storagePath, { token: assetConfiguration.blobToken })).catch(() => {});
+        // The manifest write may have committed before its acknowledgment failed.
+        // A conflict may also belong to a concurrent winner using this same path.
+        // Keep uncertain/shared media. Validation and Asset-limit rejections
+        // happen before the manifest write; only they permit orphan cleanup.
+        const definiteRejection = error instanceof CreatorProjectError
+            && (error.status === 400 || error.code === 'asset_limit');
+        if (definiteRejection) {
+            let unreferenced = false;
+            try {
+                const project = await getCreatorProject(user, projectId, { env, blobStore });
+                unreferenced = !project.assets.some((asset) => asset.storagePath === storagePath || asset.url === uploaded.url);
+            } catch { /* Defer cleanup when the manifest cannot be checked. */ }
+            if (unreferenced) {
+                await Promise.resolve(assetBlobStore.del?.(storagePath, { token: assetConfiguration.blobToken })).catch(() => {});
+            }
+        }
         throw error;
     }
 }

@@ -94,14 +94,16 @@ function storeAccess(env, blobStore) {
                 throw new GenerationGuardError('storage_unavailable', 'Generation storage is temporarily unavailable.', 503);
             }
             if (!result) return null;
-            let text = '';
-            if (typeof result.text === 'function') text = await result.text();
-            else if (result.stream) text = await new Response(result.stream).text();
-            else if (result.body) text = await new Response(result.body).text();
             try {
-                return JSON.parse(text);
+                let text = '';
+                if (typeof result.text === 'function') text = await result.text();
+                else if (result.stream) text = await new Response(result.stream).text();
+                else if (result.body) text = await new Response(result.body).text();
+                const value = JSON.parse(text);
+                if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid_record');
+                return value;
             } catch {
-                return null;
+                throw new GenerationGuardError('storage_unavailable', 'Generation storage is temporarily unavailable.', 503);
             }
         },
         async write(pathname, value, { overwrite = true } = {}) {
@@ -123,6 +125,19 @@ function storeAccess(env, blobStore) {
 
 function round4(value) {
     return Math.round(value * 10_000) / 10_000;
+}
+
+function validateLedger(ledger, day) {
+    const valid = ledger.day === day
+        && typeof ledger.spentUsd === 'number'
+        && Number.isFinite(ledger.spentUsd)
+        && ledger.spentUsd >= 0
+        && Number.isSafeInteger(ledger.jobs)
+        && ledger.jobs >= 0
+        && (ledger.refundIds === undefined || (Array.isArray(ledger.refundIds)
+            && ledger.refundIds.every((id) => typeof id === 'string' && JOB_ID_PATTERN.test(id))));
+    if (!valid) throw new GenerationGuardError('storage_unavailable', 'Generation spend ledger is invalid.', 503);
+    return ledger;
 }
 
 export async function reserveGeneration({
@@ -160,7 +175,7 @@ export async function reserveGeneration({
     if (mode === 'live') {
         ledgerDay = new Date(now).toISOString().slice(0, 10);
         ledgerPath = `${ROOT}/${ownerKey}/ledger/${ledgerDay}.json`;
-        ledger = (await store.read(ledgerPath)) || { day: ledgerDay, spentUsd: 0, jobs: 0 };
+        ledger = validateLedger((await store.read(ledgerPath)) || { day: ledgerDay, spentUsd: 0, jobs: 0 }, ledgerDay);
         if (round4(ledger.spentUsd + estimateUsd) > limits.maxUsdPerDay) {
             throw new GenerationGuardError('daily_limit', 'Daily generation spend limit reached.', 402);
         }
@@ -186,17 +201,25 @@ export async function reserveGeneration({
     return { ownerKey, fingerprint, lockPath, ledgerDay, estimateUsd };
 }
 
-export async function refundSpend({ user, env, blobStore, ledgerDay, estimateUsd }) {
+export async function refundSpend({ user, env, blobStore, ledgerDay, estimateUsd, refundId }) {
     if (!ledgerDay) return;
     if (typeof ledgerDay !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(ledgerDay)) {
         throw new GenerationGuardError('invalid_ledger_day', 'Ledger day is invalid.', 400);
     }
     assertEstimate(estimateUsd);
+    if (refundId !== undefined && (typeof refundId !== 'string' || !JOB_ID_PATTERN.test(refundId))) {
+        throw new GenerationGuardError('invalid_refund', 'Refund identity is invalid.', 400);
+    }
     const store = storeAccess(env, blobStore);
     const path = `${ROOT}/${generationOwnerKey(user, env)}/ledger/${ledgerDay}.json`;
     const ledger = await store.read(path);
     if (!ledger) return;
+    validateLedger(ledger, ledgerDay);
+    if (refundId !== undefined && ledger.refundIds?.includes(refundId)) return;
     ledger.spentUsd = Math.max(0, round4(ledger.spentUsd - estimateUsd));
+    // The debit and its identity share one Blob write: a lost acknowledgment or
+    // later job-record failure cannot apply the same refund again on a retry.
+    if (refundId !== undefined) ledger.refundIds = [...(ledger.refundIds || []), refundId];
     await store.write(path, ledger);
 }
 
