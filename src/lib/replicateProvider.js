@@ -116,14 +116,49 @@ async function fetchWithTimeout(fetchImpl, url, options, timeoutMs) {
 }
 
 async function readJson(response) {
-    const raw = await response.text();
-    if (new TextEncoder().encode(raw).byteLength > MAX_PROVIDER_JSON_BYTES) return { error: 'too_large' };
     try {
-        return { value: JSON.parse(raw) };
+        const declared = Number(response.headers?.get?.('content-length'));
+        if (Number.isFinite(declared) && declared > MAX_PROVIDER_JSON_BYTES) return { error: 'too_large' };
+        let raw = '';
+        if (response.body && typeof response.body.getReader === 'function') {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let total = 0;
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                total += value.byteLength;
+                if (total > MAX_PROVIDER_JSON_BYTES) {
+                    try { await reader.cancel(); } catch { /* ignore */ }
+                    return { error: 'too_large' };
+                }
+                raw += decoder.decode(value, { stream: true });
+            }
+            raw += decoder.decode();
+        } else {
+            raw = await response.text();
+            if (new TextEncoder().encode(raw).byteLength > MAX_PROVIDER_JSON_BYTES) return { error: 'too_large' };
+        }
+        try {
+            return { value: JSON.parse(raw) };
+        } catch {
+            return { error: 'invalid' };
+        }
     } catch {
-        return { error: 'invalid' };
+        return { error: 'unreadable' };
     }
 }
+
+// Submit may already have created a billed prediction when the outcome is unknown, so it must never be retried silently.
+function unknownOutcome(failure) {
+    return { ...failure, retryable: false, outcomeUnknown: true };
+}
+
+function submitFailure(failure) {
+    return { ...failure, outcomeUnknown: false };
+}
+
+const DEFINITE_REJECTION_STATUSES = [400, 401, 402, 403, 404, 409, 422, 429];
 
 function networkFailure(result) {
     return {
@@ -230,12 +265,16 @@ export async function submitReplicateJob(prepared, {
         },
         body: JSON.stringify({ input }),
     }, timeoutMs);
-    if (result.networkError) return networkFailure(result);
+    if (result.networkError) return unknownOutcome(networkFailure(result));
     const decoded = await readJson(result);
-    if (decoded.error) return { ok: false, status: 502, error: 'Replicate returned an invalid response.', retryable: true };
-    if (!result.ok) return providerFailure(result, decoded.value, liveConfig.apiKey);
+    if (!result.ok && DEFINITE_REJECTION_STATUSES.includes(result.status)) {
+        const failure = providerFailure(result, decoded.value, liveConfig.apiKey);
+        return submitFailure({ ...failure, retryable: false });
+    }
+    if (decoded.error) return unknownOutcome({ ok: false, status: 502, error: 'Replicate returned an invalid response.' });
+    if (!result.ok) return unknownOutcome(providerFailure(result, decoded.value, liveConfig.apiKey));
     const job = publicJob(model, decoded.value, liveConfig.apiKey);
-    if (!job.jobId) return { ok: false, status: 502, error: 'Replicate returned no valid prediction ID.' };
+    if (!job.jobId) return unknownOutcome({ ok: false, status: 502, error: 'Replicate returned no valid prediction ID.' });
     return { ok: true, status: job.status === 'completed' ? 200 : 202, job };
 }
 
