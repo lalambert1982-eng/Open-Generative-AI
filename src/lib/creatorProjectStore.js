@@ -38,7 +38,7 @@ const DEFAULT_ASSET_HOSTS = Object.freeze([
     '*.heygen.com',
 ]);
 
-const defaultBlobStore = {
+export const defaultBlobStore = {
     del: deleteBlob,
     get: getBlob,
     list: listBlobs,
