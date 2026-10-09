@@ -14,6 +14,7 @@ import {
   Sparkles, UserRound, WandSparkles, Workflow, X, Zap,
 } from 'lucide-react';
 import CreatorHome from './CreatorHome';
+import CreatorMediaStudio from './CreatorMediaStudio';
 import LegacyProviderSettings from './LegacyProviderSettings';
 import ProjectsStudio from './ProjectsStudio';
 import StudioAssets from './StudioAssets';
@@ -121,6 +122,8 @@ export default function StandaloneShell() {
   const [assetUploading, setAssetUploading] = useState(false);
   const [selenaAction, setSelenaAction] = useState(null);
   const projectMutationRef = useRef(Promise.resolve());
+  const currentProjectIdRef = useRef('');
+  useEffect(() => { currentProjectIdRef.current = currentProject?.id || ''; }, [currentProject?.id]);
 
   const navigate = useCallback((path) => {
     router.push(path, { scroll: false });
@@ -207,6 +210,22 @@ export default function StandaloneShell() {
       return null;
     } finally {
       setProjectsLoading(false);
+    }
+  }, [applyCurrentProject]);
+
+  // Replicate completion is saved to the Project by the server. Refresh the Project the job
+  // started in; only replace the visible Project/Assets if it is still the selected one.
+  const settleReplicateJob = useCallback(async ({ projectId }) => {
+    try {
+      const value = await projectRequest(`/${encodeURIComponent(projectId)}`);
+      if (currentProjectIdRef.current === projectId) applyCurrentProject(value.project);
+      else {
+        setProjectSummaries((previous) => previous.map((project) => project.id === projectId
+          ? { ...project, updatedAt: value.project.updatedAt, revision: value.project.revision, assetCount: value.project.assets?.length || 0 }
+          : project));
+      }
+    } catch (refreshError) {
+      if (refreshError.status !== 401) setProjectError(refreshError.message || 'Project could not be refreshed.');
     }
   }, [applyCurrentProject]);
 
@@ -492,8 +511,8 @@ export default function StandaloneShell() {
     switch (destinationId) {
       case 'home': return <CreatorHome onNavigate={navigate} onAskSelena={(prompt) => { setSelenaPrompt(prompt); navigate('/studio/selena'); }} />;
       case 'selena': return <CreatorStudio {...callbacks('selena')} {...creatorProjectProps} initialToolId="assistant" allowedToolIds={['assistant']} initialPrompt={selenaPrompt} workspaceLabel="Selena" />;
-      case 'image': return <CreatorStudio {...callbacks('image')} {...creatorProjectProps} initialToolId="image" allowedToolIds={['image']} workspaceLabel="Image" />;
-      case 'video': return <CreatorStudio {...callbacks('video')} {...creatorProjectProps} initialToolId="video" allowedToolIds={['video']} initialAsset={handoffAsset} workspaceLabel="Video" />;
+      case 'image': return <CreatorMediaStudio kind="image" workspaceLabel="Image" project={currentProject} assets={assets} onJobSettled={settleReplicateJob} muapiWorkspace={<CreatorStudio {...callbacks('image')} {...creatorProjectProps} initialToolId="image" allowedToolIds={['image']} workspaceLabel="Image" />} />;
+      case 'video': return <CreatorMediaStudio kind="video" workspaceLabel="Video" project={currentProject} assets={assets} onJobSettled={settleReplicateJob} muapiWorkspace={<CreatorStudio {...callbacks('video')} {...creatorProjectProps} initialToolId="video" allowedToolIds={['video']} initialAsset={handoffAsset} workspaceLabel="Video" />} />;
       case 'audio': return <CreatorStudio {...callbacks('audio')} {...creatorProjectProps} initialToolId="voice" allowedToolIds={['voice']} workspaceLabel="Audio & Voice" />;
       case 'avatar': return <CreatorStudio {...callbacks('avatar')} {...creatorProjectProps} initialToolId="avatar" allowedToolIds={['avatar']} workspaceLabel="Avatar" />;
       case 'music': return <AudioStudio {...legacyShared} />;

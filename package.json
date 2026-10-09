@@ -35,6 +35,7 @@
     "test:security": "node --test tests/security/*.test.js",
     "test:creator-shell": "node --test tests/storyboardWorkspace.test.js tests/studioNavigation.test.js tests/creatorShellIntegration.test.js",
     "test:storyboard": "node --test tests/storyboardWorkspace.test.js",
+    "test:replicate-ui": "node --test tests/replicateStudioForm.test.js tests/replicateStudioClient.test.js tests/replicateStudioController.test.js tests/replicateStudioView.test.js tests/replicateStudioWiring.test.js",
     "package:linux:deb": "node scripts/package-linux-deb.js",
     "package:linux:deb:arm64": "node scripts/package-linux-deb.js --arch arm64",
     "package:linux:deb:x64": "node scripts/package-linux-deb.js --arch x64",

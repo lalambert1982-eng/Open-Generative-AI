@@ -44,3 +44,28 @@ test('CreatorMediaStudio keeps Replicate default and MuAPI behind an explicit se
     assert.match(source, /hidden=\{provider !== 'replicate'\}/);
     assert.doesNotMatch(source, /provider === 'replicate'\s*\?/);
 });
+
+test('shell routes Image and Video through the wrapper and keeps MuAPI as a passed-in element', async () => {
+    const shell = await read('../components/StandaloneShell.js');
+    assert.match(shell, /import CreatorMediaStudio from '\.\/CreatorMediaStudio'/);
+    assert.match(shell, /<CreatorMediaStudio kind="image"/);
+    assert.match(shell, /<CreatorMediaStudio kind="video"/);
+    assert.match(shell, /muapiWorkspace=\{<CreatorStudio[^>]*initialToolId="image"/);
+    assert.match(shell, /muapiWorkspace=\{<CreatorStudio[^>]*initialToolId="video"/);
+});
+
+test('the Replicate flow refreshes the originating Project and never posts the Asset again', async () => {
+    const shell = await read('../components/StandaloneShell.js');
+    const start = shell.indexOf('const settleReplicateJob');
+    const endMarker = '}, [applyCurrentProject]);';
+    const end = shell.indexOf(endMarker, start);
+    const block = start >= 0 && end >= 0 ? shell.slice(start, end + endMarker.length) : '';
+    assert.ok(block.length > 0, 'settleReplicateJob block must exist');
+    assert.match(block, /projectRequest\(`\/\$\{encodeURIComponent\(projectId\)\}`\)/);
+    assert.match(block, /currentProjectIdRef\.current === projectId/);
+    assert.match(block, /applyCurrentProject\(value\.project\)/);
+    assert.match(block, /setProjectSummaries/);
+    assert.doesNotMatch(block, /recordAsset|\/assets/);
+    const wrapperCalls = shell.match(/<CreatorMediaStudio[^]*?\/>/g) || [];
+    for (const call of wrapperCalls) assert.doesNotMatch(call, /onGenerationComplete|recordAsset/);
+});
