@@ -142,6 +142,7 @@ export function createReplicateController({
     }
 
     function applyJob(job, { polled = false } = {}) {
+        if (state.jobId === job.jobId && TERMINAL.has(state.phase)) return;
         if (!TERMINAL.has(job.status)) {
             set({ job, jobId: job.jobId, phase: 'running', checkFailed: false, uncertain: null });
             if (!polled) startPolling(job.jobId);
@@ -324,6 +325,7 @@ export function createReplicateController({
 
     async function checkStatus() {
         const jobId = state.phase === 'uncertain' ? state.uncertain?.jobId : state.jobId;
+        if (state.phase !== 'running' && state.phase !== 'uncertain') return;
         if (!jobId || inFlight) return;
         inFlight = true;
         const myEpoch = epoch;

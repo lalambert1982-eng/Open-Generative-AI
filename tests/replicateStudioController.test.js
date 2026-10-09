@@ -433,3 +433,49 @@ test('starting a new generation clears the previous result and uncertainty', asy
     await h.controller.generate();
     assert.equal(h.count('generate'), 2);
 });
+
+test('checkStatus after completion makes no status call and does not settle again', async () => {
+    const h = harness();
+    await h.ready();
+    await h.controller.generate();
+    assert.equal(h.controller.getState().phase, 'completed');
+    await h.controller.checkStatus();
+    assert.equal(h.count('status'), 0);
+    assert.equal(h.settled.length, 1);
+});
+
+test('a late non-terminal poll response after a confirmed terminal state does not regress the job', async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const h = harness({
+        overrides: {
+            generate: async (body) => { h.calls.push(['generate', body]); return queuedJob(); },
+            status: async () => { await gate; return { job: job('processing') }; },
+        },
+    });
+    await h.ready();
+    await h.controller.generate();
+    const inFlight = h.fire();
+    await h.controller.cancel();
+    assert.equal(h.controller.getState().phase, 'canceled');
+    release();
+    await inFlight;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(h.controller.getState().phase, 'canceled');
+    assert.equal(h.pending().length, 0);
+    assert.equal(h.settled.length, 0);
+});
+
+test('checkStatus after acknowledging an uncertain job makes no status call', async () => {
+    const h = harness({
+        overrides: {
+            generate: async (body) => { h.calls.push(['generate', body]); throw accepted({ statusRecoveryAvailable: false, jobRecordState: 'unconfirmed' }); },
+        },
+    });
+    await h.ready();
+    await h.controller.generate();
+    h.controller.acknowledge();
+    await h.controller.checkStatus();
+    assert.equal(h.count('status'), 0);
+    assert.equal(h.controller.getState().phase, 'idle');
+});
