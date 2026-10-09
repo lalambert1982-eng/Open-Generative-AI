@@ -69,3 +69,12 @@ test('the Replicate flow refreshes the originating Project and never posts the A
     const wrapperCalls = shell.match(/<CreatorMediaStudio[^]*?\/>/g) || [];
     for (const call of wrapperCalls) assert.doesNotMatch(call, /onGenerationComplete|recordAsset/);
 });
+
+test('Home shows recent Project Assets and enabled models without breaking the Selena prompt', async () => {
+    const home = await read('../components/CreatorHome.js');
+    const shell = await read('../components/StandaloneShell.js');
+    assert.match(home, /recentAssets/);
+    assert.match(home, /createReplicateApi/);
+    assert.match(home, /onAskSelena\?\.\(value\)/);
+    assert.match(shell, /<CreatorHome onNavigate=\{navigate\}[^]*?recentAssets=\{assets/);
+});

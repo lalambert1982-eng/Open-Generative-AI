@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowRight, Bot, Film, Image, LayoutGrid, Megaphone, Music2, Sparkles, UserRound } from 'lucide-react';
+import { createReplicateApi } from '@/src/lib/replicateStudioClient.js';
 
 const ACTIONS = [
   { label: 'AI Generator', path: '/studio/apps/generator', icon: Sparkles, copy: 'Create an image or video without choosing a provider.' },
@@ -14,8 +15,17 @@ const ACTIONS = [
   { label: 'Social Campaign', path: '/studio/apps/marketing', icon: Megaphone, copy: 'Prepare campaign creative and copy.' },
 ];
 
-export default function CreatorHome({ onNavigate, onAskSelena }) {
+export default function CreatorHome({ onNavigate, onAskSelena, recentAssets = [] }) {
   const [prompt, setPrompt] = useState('');
+  const [models, setModels] = useState([]);
+  useEffect(() => {
+    let active = true;
+    createReplicateApi().models()
+      .then((value) => { if (active) setModels((value.models || []).filter((item) => item.enabled !== false).slice(0, 4)); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
+  const recent = recentAssets.filter((asset) => asset?.url).slice(0, 4);
 
   const submit = (event) => {
     event.preventDefault();
@@ -58,6 +68,37 @@ export default function CreatorHome({ onNavigate, onAskSelena }) {
             </button>
           ))}
         </div>
+        {recent.length > 0 && (
+          <section aria-label="Recent in this Project" className="mt-10">
+            <h2 className="text-[11px] font-black uppercase tracking-[0.22em] text-white/35">Recent in this Project</h2>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {recent.map((asset) => (
+                <a key={asset.id} href={asset.url} target="_blank" rel="noreferrer" className="overflow-hidden rounded-2xl border border-white/[0.07] bg-white/[0.025]">
+                  <div className="aspect-video bg-black">
+                    {asset.type === 'video'
+                      ? <video src={asset.url} muted preload="metadata" className="h-full w-full object-cover" />
+                      // eslint-disable-next-line @next/next/no-img-element
+                      : <img src={asset.url} alt={asset.title || 'Project Asset'} className="h-full w-full object-cover" />}
+                  </div>
+                  <p className="truncate p-3 text-xs font-semibold">{asset.title || asset.id}</p>
+                </a>
+              ))}
+            </div>
+          </section>
+        )}
+        {models.length > 0 && (
+          <section aria-label="Featured models" className="mt-10">
+            <h2 className="text-[11px] font-black uppercase tracking-[0.22em] text-white/35">Featured models</h2>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {models.map((item) => (
+                <button key={item.id} type="button" onClick={() => onNavigate?.(item.kind === 'video' ? '/studio/tools/video' : '/studio/tools/image')}
+                  className="rounded-full border border-white/[0.1] px-4 py-2 text-xs font-bold text-white/70 hover:text-white">
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
       </div>
     </div>
   );

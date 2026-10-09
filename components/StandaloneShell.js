@@ -509,7 +509,7 @@ export default function StandaloneShell() {
 
   const renderDestination = () => {
     switch (destinationId) {
-      case 'home': return <CreatorHome onNavigate={navigate} onAskSelena={(prompt) => { setSelenaPrompt(prompt); navigate('/studio/selena'); }} />;
+      case 'home': return <CreatorHome onNavigate={navigate} onAskSelena={(prompt) => { setSelenaPrompt(prompt); navigate('/studio/selena'); }} recentAssets={assets} />;
       case 'selena': return <CreatorStudio {...callbacks('selena')} {...creatorProjectProps} initialToolId="assistant" allowedToolIds={['assistant']} initialPrompt={selenaPrompt} workspaceLabel="Selena" />;
       case 'image': return <CreatorMediaStudio kind="image" workspaceLabel="Image" project={currentProject} assets={assets} onJobSettled={settleReplicateJob} muapiWorkspace={<CreatorStudio {...callbacks('image')} {...creatorProjectProps} initialToolId="image" allowedToolIds={['image']} workspaceLabel="Image" />} />;
       case 'video': return <CreatorMediaStudio kind="video" workspaceLabel="Video" project={currentProject} assets={assets} onJobSettled={settleReplicateJob} muapiWorkspace={<CreatorStudio {...callbacks('video')} {...creatorProjectProps} initialToolId="video" allowedToolIds={['video']} initialAsset={handoffAsset} workspaceLabel="Video" />} />;
