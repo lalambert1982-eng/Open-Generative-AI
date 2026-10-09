@@ -63,3 +63,10 @@ The run used a freshly restarted fixture (empty state). Screenshots: `.superpowe
 4. Per-job cap value not displayed in the UI, so the video cap check is by absence of a cap error.
 5. Fixture state is in memory; the first partial run (before the final clean run) was discarded. An unrelated `next-server` was left running on `*:3000` (IPv6) and was not touched.
 6. Stopped at the end: Chrome, fixture (pid started by me), and the dev server I started; ports 4010 and 9333 are free.
+
+## Additional limitations (final review)
+
+- Navigating away from Image/Video in-app (or a page reload / `kind` change) while a job is running or uncertain tears down the on-screen controller. The job still completes server-side and its Asset is saved to the Project, but the jobId, progress, and the "uncertain, acknowledge first" lock are lost on return; only the server's 60-second duplicate lock then protects against a second paid create. Fixing this needs lifting the controller to the shell or persisting the jobId in sessionStorage, which is beyond the approved spec.
+- Live-mode confirm, Cancel, Check status, and provider-lock-during-running were covered only by unit tests, not by the browser run.
+- `onAuthLost` is not wired from the shell (the studio shows the session-ended banner itself).
+- Preview `<img>` requests hit creator.public.blob.vercel-storage.com in the fixture run. Run the dev server with `-H 127.0.0.1` for fixture runs.

@@ -65,8 +65,8 @@ test('an acknowledged uncertainty stays visible but Generate is available again'
 
 test('running shows Cancel, locks provider switching, and shows Check status after a failed poll or deadline', () => {
     const running = deriveView(state({ phase: 'running', jobId: 'job1', job: { status: 'processing' } }));
+    assert.equal(running.locked, true);
     assert.equal(running.showCancel, true);
-    assert.equal(running.providerSwitchDisabled, true);
     assert.equal(running.showCheckStatus, false);
     assert.equal(deriveView(state({ phase: 'running', jobId: 'job1', checkFailed: true })).showCheckStatus, true);
     assert.equal(deriveView(state({ phase: 'running', jobId: 'job1', deadlineReached: true })).showCheckStatus, true);

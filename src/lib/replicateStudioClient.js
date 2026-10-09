@@ -125,7 +125,7 @@ export function createReplicateController({
         stopPolling();
         set({
             phase: 'uncertain', jobId: jobId || '', quote: null, overCap: false,
-            uncertain: { jobId: jobId || null, message, acknowledged: false },
+            uncertain: { jobId: jobId || null, message, baseMessage: message, acknowledged: false },
         });
     }
 
@@ -242,6 +242,7 @@ export function createReplicateController({
             const overCap = Number.isFinite(cap) && value.estimateUsd > cap;
             set({
                 phase: 'quoted', overCap,
+                ...((value.mode === 'mock' || value.mode === 'live') && value.mode !== state.mode ? { mode: value.mode } : {}),
                 quote: {
                     estimateUsd: value.estimateUsd, display: value.display, quoteToken: value.quoteToken,
                     expiresAt: value.expiresAt, mode: value.mode, maxUsdPerJob: value.maxUsdPerJob,
@@ -307,7 +308,7 @@ export function createReplicateController({
         try {
             if (state.phase === 'quoted') return;
             const reviewed = await doReview();
-            if (reviewed && state.mode !== 'live') await doSubmit();
+            if (reviewed && state.quote?.mode !== 'live' && state.mode !== 'live') await doSubmit();
         } finally {
             inFlight = false;
         }
@@ -339,7 +340,7 @@ export function createReplicateController({
             if (state.phase === 'uncertain') {
                 const message = error.status === 404
                     ? `Job ${jobId} is not recorded on the server. That does not prove nothing was generated; it may still have been billed. Operator review is needed before generating this request again.`
-                    : error.message;
+                    : `${state.uncertain.baseMessage ?? state.uncertain.message} (Status check failed: ${error.message})`;
                 set({ uncertain: { ...state.uncertain, message } });
             } else {
                 set({ checkFailed: true, error: error.message });

@@ -479,3 +479,35 @@ test('checkStatus after acknowledging an uncertain job makes no status call', as
     assert.equal(h.count('status'), 0);
     assert.equal(h.controller.getState().phase, 'idle');
 });
+
+test('a live quote on a mock-badged page is never auto-submitted', async () => {
+    const h = harness({
+        mode: 'mock',
+        overrides: {
+            quote: async (body) => { h.calls.push(['quote', body]); return { estimateUsd: 0.003, display: '~$0.003', quoteToken: 'tok', expiresAt: new Date(NOW + 300000).toISOString(), mode: 'live', maxUsdPerJob: 1 }; },
+        },
+    });
+    await h.ready();
+    await h.controller.generate();
+    const state = h.controller.getState();
+    assert.equal(h.count('generate'), 0);
+    assert.equal(state.phase, 'quoted');
+    assert.equal(state.mode, 'live');
+});
+
+test('a failed status check keeps the uncertain warning, appends the error once, and does not stack', async () => {
+    const h = harness({
+        overrides: {
+            generate: async (body) => { h.calls.push(['generate', body]); throw accepted({ statusRecoveryAvailable: false, jobRecordState: 'unconfirmed' }); },
+            status: async (id) => { h.calls.push(['status', id]); throw new ReplicateApiError('Server exploded.', { status: 500 }); },
+        },
+    });
+    await h.ready();
+    await h.controller.generate();
+    await h.controller.checkStatus();
+    await h.controller.checkStatus();
+    const { message } = h.controller.getState().uncertain;
+    assert.match(message, /billed|Operator review/);
+    assert.match(message, /Server exploded\./);
+    assert.equal(message.split('Status check failed').length - 1, 1);
+});

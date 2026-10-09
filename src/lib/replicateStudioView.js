@@ -83,7 +83,6 @@ export function deriveView(state) {
         showCheckStatus: (state.phase === 'running' && (state.checkFailed || state.deadlineReached))
             || (state.phase === 'uncertain' && Boolean(state.uncertain?.jobId)),
         showAcknowledge: unacknowledged,
-        providerSwitchDisabled: locked,
         banners,
         progressText: state.phase === 'running' ? (PROGRESS[state.job?.status] || 'Working…') : '',
         result,
