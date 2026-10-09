@@ -122,3 +122,11 @@ Protect owner and originating-Project context during asynchronous completion.
   threshold test. Media magic-byte validation remains an accepted omission.
 - All continuation instructions remain subordinate to the user's latest scope
   and explicit approvals. Saving this note did not approve UI implementation.
+
+## UI increment (2026-10-09) — implemented locally, nothing pushed
+
+Plan: `docs/superpowers/plans/2026-10-09-replicate-creator-ui.md` (executed with subagent-driven development; commits `240dfd6..f18eb72`).
+Built: `src/lib/replicateStudio{Form,Client,View}.js`, `components/ReplicateStudio.js`, `components/CreatorMediaStudio.js`, Image/Video routed through the wrapper in `StandaloneShell.js`, Home recents/models, mocked browser fixture `scripts/replicate-ui-fixture-server.mjs` + dev-only rewrite in `next.config.mjs`.
+Verified (controller re-run at f18eb72): test:security 318/318, creator-shell 25/25, test:replicate-ui 65/65, top-level 111/111, integration 6/6, HTTP smoke 11/11, lint 0 errors (1 pre-existing warning), `npm run build` rc 0, headless-Chrome mocked checklist 10/10 (see the verification doc).
+Not verified / limitations: see `docs/superpowers/handoff/2026-10-09-replicate-ui-verification.md` (navigation/reload mid-job loses the on-screen job; live-mode paths only unit-tested; onAuthLost not wired; live model schemas/prices unverified; no real provider, Blob or GitHub call was ever made).
+Next: owner decisions (job-resume persistence, Plan C legacy cleanup + Preview deploy, live-model verification with approval).
