@@ -17,7 +17,9 @@ export function deriveView(state) {
     let disabledReason = '';
     if (!state.loaded) disabledReason = 'Loading models…';
     else if (state.loadError) disabledReason = state.loadError;
+    else if (state.authLost) disabledReason = 'Sign in again to continue.';
     else if (!state.configured) disabledReason = 'Replicate is not configured on this server.';
+    else if (state.mode !== 'mock' && state.mode !== 'live') disabledReason = 'Replicate mode is unknown; check server configuration.';
     else if (!state.modelId) disabledReason = 'No models are available for this workspace.';
     else if (!state.projectId) disabledReason = 'Open a Project to generate.';
     else if (unacknowledged) disabledReason = 'Acknowledge the uncertain request before generating again.';
@@ -35,8 +37,10 @@ export function deriveView(state) {
         primary = { action: 'confirm', label: `Confirm and generate · ${formatUsd(state.quote.estimateUsd)}`, enabled: ready && !state.overCap };
     } else if (live) {
         primary = { action: 'generate', label: 'Review price', enabled: ready && !locked };
-    } else {
+    } else if (state.mode === 'mock') {
         primary = { action: 'generate', label: 'Generate (mock — no charge)', enabled: ready && !locked && !(quoted && state.overCap) };
+    } else {
+        primary = { action: 'generate', label: 'Generate', enabled: false };
     }
 
     const price = quoted

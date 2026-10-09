@@ -108,3 +108,16 @@ test('failed jobs show the server message; no Retry control exists in the view',
     assert.ok(view.banners.some((banner) => banner.tone === 'error' && /rejected/.test(banner.text)));
     assert.equal(Object.hasOwn(view, 'showRetry'), false);
 });
+
+test('an unknown mode never shows a no-charge label and blocks Generate', () => {
+    const view = deriveView(state({ mode: null }));
+    assert.equal(view.primary.enabled, false);
+    assert.doesNotMatch(view.primary.label, /no charge/i);
+    assert.notEqual(view.disabledReason, '');
+});
+
+test('a lost session blocks Generate', () => {
+    const view = deriveView(state({ authLost: true }));
+    assert.equal(view.primary.enabled, false);
+    assert.match(view.disabledReason, /Sign in/);
+});
