@@ -41,4 +41,6 @@ test('CreatorMediaStudio keeps Replicate default and MuAPI behind an explicit se
     assert.match(source, /muapiWorkspace/);
     assert.match(source, /role="radiogroup"/);
     assert.match(source, /providerSwitchDisabled|busy/);
+    assert.match(source, /hidden=\{provider !== 'replicate'\}/);
+    assert.doesNotMatch(source, /provider === 'replicate'\s*\?/);
 });

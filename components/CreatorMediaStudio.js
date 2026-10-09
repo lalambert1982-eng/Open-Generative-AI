@@ -29,9 +29,10 @@ export default function CreatorMediaStudio({ kind, workspaceLabel, project, asse
         {busy && <span className="text-[11px] text-white/35">Provider locked while a generation is active.</span>}
       </div>
       <div className="min-h-0 flex-1">
-        {provider === 'replicate'
-          ? <ReplicateStudio kind={kind} project={project} assets={assets} onJobSettled={onJobSettled} onAuthLost={onAuthLost} onBusyChange={setBusy} />
-          : muapiWorkspace}
+        <div hidden={provider !== 'replicate'} className="h-full">
+          <ReplicateStudio kind={kind} project={project} assets={assets} onJobSettled={onJobSettled} onAuthLost={onAuthLost} onBusyChange={setBusy} />
+        </div>
+        {provider === 'muapi' ? muapiWorkspace : null}
       </div>
     </div>
   );
