@@ -25,7 +25,7 @@ export default function CreatorHome({ onNavigate, onAskSelena, recentAssets = []
       .catch(() => {});
     return () => { active = false; };
   }, []);
-  const recent = recentAssets.filter((asset) => asset?.url).slice(0, 4);
+  const recent = recentAssets.filter((asset) => asset?.url && ['image', 'video', 'graphic'].includes(asset.type)).slice(0, 4);
 
   const submit = (event) => {
     event.preventDefault();

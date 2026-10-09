@@ -76,5 +76,6 @@ test('Home shows recent Project Assets and enabled models without breaking the S
     assert.match(home, /recentAssets/);
     assert.match(home, /createReplicateApi/);
     assert.match(home, /onAskSelena\?\.\(value\)/);
+    assert.match(home, /\['image',\s*'video',\s*'graphic'\]\.includes\(asset\.type\)/);
     assert.match(shell, /<CreatorHome onNavigate=\{navigate\}[^]*?recentAssets=\{assets/);
 });
