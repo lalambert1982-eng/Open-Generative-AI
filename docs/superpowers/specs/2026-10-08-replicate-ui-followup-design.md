@@ -1,7 +1,9 @@
 # Replicate Creator Studio: UI follow-up design
 
-Status: proposed for review, updated for the delivered backend contract.
-No UI implementation has started.
+Status: APPROVED by the user on 2026-10-09 as written. No UI implementation has started.
+Rulings: Claude solely owns components/*, src/lib/replicateStudioClient.js and StandaloneShell.js
+for this plan; Generate stays disabled for an uncertain accepted/unknown job until the user
+acknowledges the uncertainty.
 
 Base: `rebuild/creator-studio-replicate`, backend complete through `887a858`
 (including the accepted-job error contract).
