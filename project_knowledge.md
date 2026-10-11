@@ -1,99 +1,45 @@
-# Open Generative AI: Technical Documentation & Context
+# Creator Studio v2 project context
 
-This document serves as a comprehensive knowledge base for the Open Generative AI project. It details the architecture, key components, API integration patterns, and state management strategies used in the application.
+Updated 2026-10-10 for the local `rebuild/creator-studio-replicate` branch in `/Users/abl2525/ogai-creator-studio-v2`. This describes the retained rebuild, not the historical Production release.
 
-## 1. Project Vision & Overview
+## Architecture
 
-**Open Generative AI** is an ambitious open-source project for AI image and video generation.
+The app uses Next.js App Router, React, Node 24, Tailwind CSS v3, and the retained `packages/studio` npm workspace. The workspace exports CreatorStudio and SocialPublishStudio from source. Setup is `npm ci`; development is `npm run dev`. See [LOCAL_RUN.md](docs/LOCAL_RUN.md) for required identity/storage setup and isolated test alternatives.
 
-- **Core Goal:** To build a feature-complete, self-hosted generative AI studio, starting with **Image Generation** (Nano) and expanding into **Video Generation** (Cinema) and other creative tools.
-- **Current State:** The Image Studio ("Nano Banana Pro" interface) is fully operational, featuring a premium dark-mode UI, history management, and multi-model support via the [Muapi.ai](https://muapi.ai) engine.
-- **Future Direction:** The architecture is designed to scale for video generation, model training interfaces, and advanced editing tools.
+| Area | Main sources |
+| --- | --- |
+| Routing and shell | `app/studio`, `components/StandaloneShell.js`, `src/lib/studioNavigation.js` |
+| Creator tools and social UI | `packages/studio/src/components/CreatorStudio.jsx`, `SocialPublishStudio.jsx` |
+| Replicate Image/Video UI | `components/CreatorMediaStudio.js`, `ReplicateStudio.js`, `src/lib/replicateStudio*.js` |
+| Resume pointer | `src/lib/replicateResume.js` |
+| Authentication and route boundary | `src/lib/creatorAuth.js`, `creatorProviderGateway.js`, `app/api/auth`, `app/api/creator` |
+| Projects and Assets | `src/lib/creatorProjectStore.js`, `creatorProjectRoutes.js`, `components/ProjectsStudio.js`, `StudioAssets.js` |
+| Replicate backend | `src/lib/replicateGateway.js`, `replicateProvider.js`, `replicatePersist.js`, `replicateModelRegistry.js`, `generationGuard.js` |
+| Selena reasoning | `src/lib/brainRouter.js`, `creatorAgentGateway.js`, `muapiAgents.js` |
+| Test fixtures | `scripts/replicate-http-smoke.mjs`, `replicate-ui-fixture-server.mjs` |
 
-- **Stack:** Vite, Vanilla JavaScript, Tailwind CSS v4.
-- **Repository:** `https://github.com/Anil-matcha/Open-Generative-AI`
-- **Primary Branch:** `main`
+Creator core includes Home, Selena, Image/Video, voice, avatar, Storyboard, Music Video, Workflow Run, Agent Team, Projects, Assets, and explicitly reviewed publishing. A visible tool does not guarantee its external provider is configured or verified. Workflow Run and Agent Team retain Creator-owned engine/routes; they do not depend on the removed standalone editors.
 
-## 2. Architecture & File Structure
+## Identity, persistence, and provider boundaries
 
-The project follows a component-based architecture using vanilla JS, where each component is a function that returns a DOM element.
+GitHub OAuth uses state/PKCE and an owner allowlist. The signed session is HttpOnly; the server derives ownership from the authenticated GitHub user ID. Provider credentials stay in server environment variables. Browser requests authenticate with the session rather than a user-entered provider key. Server `x-api-key` headers sent to fixed MuAPI/provider hosts are expected and allowed.
 
-```tree
-src/
-├── components/
-│   ├── ImageStudio.js    # Core logic: Prompts, model picking, canvas, history.
-│   ├── Header.js         # Navigation, user settings, auth status.
-│   ├── AuthModal.js      # Modal for capturing and validating the API key.
-│   ├── SettingsModal.js   # Panel for managing settings (clearing API key).
-│   └── Sidebar.js        # (Currently unused/placeholder) Navigation sidebar.
-├── lib/
-│   ├── muapi.js          # The API Client. Handles auth, submission, and polling.
-│   └── models.js         # Source of truth for model definitions and endpoints.
-├── styles/
-│   ├── global.css        # Global resets, fonts, and animation keyframes.
-│   ├── studio.css        # Specific styles for the studio interface.
-│   └── variables.css     # CSS custom properties (colors, blur amounts).
-├── main.js               # Entry point. Renders the app layout and Header/Studio.
-└── style.css             # Tailwind CSS entry file (imports other CSS).
-```
+Private Vercel Blob holds Project manifests, job/spend records, and encrypted publishing records. A separate public Blob store holds reusable generated/uploaded media. Normal persisted use, including Replicate mock mode, needs `BLOB_READ_WRITE_TOKEN`, `CREATOR_ASSET_BLOB_READ_WRITE_TOKEN`, owner OAuth/session configuration, and their corresponding stores. Test fixtures inject fabricated sessions and in-memory stores; their success does not verify real OAuth or Blob.
 
-## 3. Key Components & Logic
+Replicate is selected by default in Image/Video. Mock mode returns placeholders and never calls Replicate; mock Video is a PNG graphic. MuAPI remains selectable, with server-selected models and server credentials; its Sandbox still contacts MuAPI and is separate from Replicate's local mocks. Optional brain, voice, avatar, render, and social paths have independent configuration and approval gates.
 
-### `ImageStudio.js` (The Brain)
-This is the most complex component. It handles:
-- **State:** Selected model (`selectedModel`), aspect ratio (`selectedAr`), and generation status.
-- **Prompt Input:** A textarea with auto-grow logic and max-height constraints (fixed in `bf2efdb`).
-- **Dynamic Controls:**
-    - **Model Picker:** Lists models from `models.js`.
-    - **Quality/Resolution:** Only appears for models with explicit resolution support (like `nano-banana-pro`). Hidden for others (like `flux-schnell`).
-- **Generation Flow:**
-    1. Checks for API key in `localStorage`. If missing, opens `AuthModal`.
-    2. Calls `muapi.generateImage()`.
-    3. Polling loop waits for result.
-    4. On success, adds result to `generationHistory` and displays it.
-- **History:**
-    - Stored in `localStorage` key `muapi_history`.
-    - Slides in from the right sidebar.
-    - Thumbnails are clickable to re-view; hover to download.
+Live Replicate requires all live-mode gates and a server token, plus an owner/input/model-bound signed quote. Default caps are $1 per job and $5 per owner/day. Submissions are not automatically retried; accepted jobs with recoverable server records use status polling. Unknown submissions and unconfirmed accepted records must preserve uncertainty without duplicate creation. Per-process job serialization and private Blob accounting do not provide distributed atomic accounting or exactly-once guarantees.
 
-### `muapi.js` (The Engine)
-Encapsulates all communication with `api.muapi.ai`.
-- **Authentication:** Uses `x-api-key` header (NOT `Authorization: Bearer`).
-- **Pattern:** Submit -> Poll.
-    - `POST` to endpoint (e.g., `/api/v1/nano-banana-pro`).
-    - API returns a `request_id`.
-    - `POST` / `GET` loop on `/api/v1/predictions/{id}/result` until status is `completed`, `succeeded`, or `failed`.
-- **Normalization:** The polling response structure varies. `muapi.js` normalizes the result to ensure `url` is always populated (extracting from `outputs[0]` if necessary).
+## Navigation and reload recovery
 
-### `models.js` (The Data)
-Contains the `t2iModels` array.
-- Each model has an `id`, `name`, `inputs` schema (resolution, aspect ratio support), and a crucial `endpoint` property.
-- **Crucial:** The `endpoint` property maps the internal ID to the API path (e.g., `flux-schnell` -> `flux-schnell-image`).
+Separate Image/Video session pointers use `ogai.replicate.activeJob.v1.image` and `.video`. The only serialized fields are `{ v, jobId, projectId, userId, ts }`; prompts, input values, media URLs, quotes, and credentials are excluded. A valid pointer is at most 30 minutes old, belongs to the current owner, and contains validated job and Project IDs. Navigation or same-tab reload recovers through the owner-bound status route and keeps the originating Project context. Terminal status, 404, session loss, and sign-out clear the pointer. Unavailable browser storage is handled as a best-effort recovery failure.
 
-## 4. UI & Styling (Tailwind v4)
+Default mock jobs can finish in the create response. Use the held-job browser fixture to verify a pending job across navigation/reload. A tab pointer is not long-term job history and cannot reconstruct an unconfirmed record.
 
-- **Theme:** Dark mode by default (`bg-app-bg` = `#050505`).
-- **Accent:** Electric Cyan (`#22d3ee`) used for primary actions and glows.
-- **Glassmorphism:** Extensive use of `backdrop-blur` and `bg-white/5` or `bg-black/60` for panels, headers, and modals.
-- **Responsiveness:**
-    - **Mobile:** Stacked layout, simplified controls, hidden sidebar.
-    - **Desktop:** Wide canvas, floating prompt bar, side-by-side history.
-- **Animations:** Custom keyframes in `global.css` for `fade-in-up`, `pulse-glow`, etc.
+## Removed module families and continuation
 
-## 5. Development Setup
+Plan C removed the Electron/Vite app, orphan browser components/libraries, legacy studios, Graphic Studio, standalone Workflow Builder, Agent Blueprints editor, Marketplace, legacy browser-key/upload proxies, and the `Vibe-Workflow`, `Open-Poe-AI`, and `Open-AI-Design-Agent` submodules locally. The retained `muapiProxy.js` URL builder is still a server dependency; its filename does not restore the removed browser proxy flow.
 
-- **Vite Proxy:** Local development uses a proxy in `vite.config.js` to route `/api` requests to `https://api.muapi.ai` to avoid CORS issues.
-- **Environment:** `muapi.js` detects `import.meta.env.DEV` to decide whether to use the relative `/api` path (proxy) or the full URL (production).
+Read `AGENTS.md`, [the Plan C design](docs/superpowers/specs/2026-10-10-legacy-cleanup-and-job-resume-design.md), and [the implementation plan](docs/superpowers/plans/2026-10-10-legacy-cleanup-and-job-resume.md). Current work reports are under `.superpowers/sdd/2026-10-10-legacy-cleanup-and-job-resume/`; the final verification record is `docs/superpowers/handoff/2026-10-10-cleanup-and-resume-verification.md` when written. Do not infer full-suite, review, or deployment completion from this context file.
 
-## 6. Known Gotchas & Fixes
-
-- **Prompt Bar Overflow:** Fixed by limiting textarea max-height and enabling scrolling.
-- **Flux Resolution Picker:** Fixed logic to only show the resolution picker if the model *explicitly* lists enum values for resolution/megapixels.
-- **Hero Visibility:** The "Nano Banana Pro" hero text is completely hidden (`display: none`) when an image is shown to prevent bleed-through.
-- **API Key Logging:** Debug logs printing the API key were removed for security.
-
-## 7. Future Roadmap (Potential)
-
-- **Video Generation:** Expand `models.js` and `ImageStudio.js` to support video models (already present in `schema_data` but not wired up).
-- **In-painting/Out-painting:** Add canvas editing tools.
-- **User Accounts:** Move beyond local storage for history.
+No live provider call, real credential use, rebuild deployment, push, PR, or merge is claimed. Live model/schema/price verification, real identity/storage checks, Preview deployment, distributed accounting, `Sec-Fetch-Site` status hardening, and CSP narrowing remain separate work.
