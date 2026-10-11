@@ -6,28 +6,11 @@ async function source(relativePath) {
   return readFile(new URL(`../../${relativePath}`, import.meta.url), 'utf8');
 }
 
-test('agent server pages no longer read API keys from cookies', async () => {
-  const files = [
-    'app/agents/[agent_id]/page.js',
-    'app/agents/[agent_id]/[conversation_id]/page.js',
-    'app/agents/create/page.js',
-    'app/agents/edit/[id]/page.js',
-  ];
-  for (const file of files) {
-    const text = await source(file);
-    assert.equal(text.includes('next/headers'), false, file);
-    assert.equal(text.includes('cookies()'), false, file);
-    assert.equal(text.includes('muapi_key'), false, file);
-  }
-});
-
-test('web BYOK storage is session-scoped and legacy cookies are only deleted', async () => {
+test('Creator shell does not accept or store browser provider credentials', async () => {
   const shell = await source('components/StandaloneShell.js');
-  const agentAuth = await source('app/agents/useAgentAuth.js');
-  assert.equal(shell.includes('sessionStorage.setItem(STORAGE_KEY, key)'), true);
-  assert.equal(shell.includes('localStorage.setItem(STORAGE_KEY, key)'), false);
-  assert.equal(shell.includes('max-age=31536000'), false);
-  assert.equal(agentAuth.includes('document.cookie'), false);
+  const settings = await source('components/LegacyProviderSettings.js');
+  assert.doesNotMatch(shell, /muapi_key|apiKey|saveKey|clearKey|document\.cookie/);
+  assert.doesNotMatch(settings, /<form|<input|apiKey|onSave|onClear|localStorage|sessionStorage/);
 });
 
 test('middleware no longer rewrites authenticated API paths directly upstream', async () => {
@@ -45,7 +28,6 @@ test('Creator Studio uses GitHub identity sessions instead of a browser-readable
   const auth = await source('src/lib/creatorAuth.js');
   const oauthStart = await source('app/api/auth/github/start/route.js');
   const oauthCallback = await source('app/api/auth/github/callback/route.js');
-  const workflowStudio = await source('packages/studio/src/components/WorkflowStudio.jsx');
 
   assert.equal(creator.includes('creator_studio_access_key'), false);
   assert.equal(creator.includes('x-studio-access-key'), false);
@@ -66,7 +48,6 @@ test('Creator Studio uses GitHub identity sessions instead of a browser-readable
   );
   assert.equal(oauthCallback.includes('createCreatorSession'), true);
   assert.equal(oauthCallback.includes('response.cookies.set'), true);
-  assert.equal(workflowStudio.includes('wl_workflow_token'), false);
 });
 
 test('YouTube publishing keeps OAuth credentials server-side and requires private approved uploads', async () => {

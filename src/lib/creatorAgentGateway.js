@@ -1,6 +1,6 @@
 // Creator-authenticated adapter around the EXISTING MuAPI Agent Blueprints API.
 // This intentionally reuses the Agent functions already implemented in
-// packages/studio/src/muapi.js (getUserAgents/createAgent/sendAgentChatMessage/
+// src/lib/muapiAgents.js (getUserAgents/createAgent/sendAgentChatMessage/
 // pollAgentChatResult/getAgentConversation) rather than re-implementing any Agent
 // networking. It mirrors the authorize -> server-owned-key -> act pattern already
 // established by creatorMuapiProxy.js / muapiCreatorProvider.js for image/video.
@@ -14,7 +14,7 @@ import {
     getUserAgents,
     pollAgentChatResult,
     sendAgentChatMessage,
-} from 'studio/src/muapi.js';
+} from './muapiAgents.js';
 
 import { creatorAgentDefinition, listEnabledCreatorAgents, publicCreatorAgent } from './creatorAgentRegistry.js';
 import { muapiConfiguration } from './muapiCreatorProvider.js';
@@ -155,7 +155,7 @@ function extractAssistantReply(messages) {
 // Submits one bounded task to an existing MuAPI agent and returns immediately
 // with an opaque requestId — it never waits for the agent's reply. Agent chat
 // turns are answered via the same billed predictions endpoint used by paid
-// media generation (see pollAgentChatResult in muapi.js), so callers MUST
+// media generation (see pollAgentChatResult in muapiAgents.js), so callers MUST
 // treat this as cost-incurring and gate it behind the same approval flow as
 // image/video generation. Callers poll pollCreatorAgentDelegation below for
 // the result, matching the existing MuAPI image/video job submit+poll pattern

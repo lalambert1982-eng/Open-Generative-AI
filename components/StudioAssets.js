@@ -1,6 +1,6 @@
 'use client';
 
-import { Film, Image as ImageIcon, Mic2, Play, Trash2, Upload } from 'lucide-react';
+import { Image as ImageIcon, Mic2, Play, Trash2, Upload } from 'lucide-react';
 
 function AssetPreview({ asset }) {
   if (asset.type === 'video') return <video src={asset.url} muted preload="metadata" className="h-full w-full object-cover" />;
@@ -15,7 +15,7 @@ export default function StudioAssets({ assets, currentProject, onOpen, onDelete,
         <p className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-300/70">Assets</p>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight">Generate once. Reuse everywhere.</h1>
         <div className="mt-3 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-          <p className="max-w-2xl text-sm leading-6 text-white/35">{currentProject ? <>Assets are retained in <strong className="text-white/55">{currentProject.name}</strong> and can move directly into Graphic Studio, Scene Builder, Lip Sync, and Publish.</> : 'Create or open a Project to retain Assets across browser sessions.'}</p>
+          <p className="max-w-2xl text-sm leading-6 text-white/35">{currentProject ? <>Assets are retained in <strong className="text-white/55">{currentProject.name}</strong> and can move directly into Scene Builder and Publish.</> : 'Create or open a Project to retain Assets across browser sessions.'}</p>
           <label className={`flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl border px-4 text-xs font-black ${currentProject && !uploading ? 'cursor-pointer border-cyan-300/20 bg-cyan-300/[0.07] text-cyan-100' : 'cursor-not-allowed border-white/[0.07] text-white/20'}`}>
             <Upload size={14} /> {uploading ? 'Uploading…' : 'Upload Asset'}
             <input type="file" className="hidden" disabled={!currentProject || uploading} accept="image/*,video/mp4,video/quicktime,video/webm,audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) onUpload?.(file); event.target.value = ''; }} />
@@ -49,9 +49,7 @@ export default function StudioAssets({ assets, currentProject, onOpen, onDelete,
                     <button type="button" onClick={() => onDelete?.(asset.id)} aria-label={`Remove ${asset.title}`} className="text-white/25 hover:text-red-300"><Trash2 size={14} /></button>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    {asset.type === 'image' && <button type="button" onClick={() => onOpen?.(asset, 'graphic-studio')} className="rounded-lg border border-white/[0.1] px-3 py-2 text-[10px] font-bold text-white/60 hover:text-white"><ImageIcon size={11} className="mr-1 inline" /> Edit graphic</button>}
                     {asset.type === 'image' && <button type="button" onClick={() => onOpen?.(asset, 'scene-builder')} className="rounded-lg bg-cyan-300 px-3 py-2 text-[10px] font-black text-black"><Play size={11} className="mr-1 inline" /> Animate</button>}
-                    {(asset.type === 'video' || asset.type === 'image') && <button type="button" onClick={() => onOpen?.(asset, 'lipsync')} className="rounded-lg border border-white/[0.1] px-3 py-2 text-[10px] font-bold text-white/60 hover:text-white"><Film size={11} className="mr-1 inline" /> Lip Sync</button>}
                     {(asset.type === 'video' || asset.type === 'image') && <button type="button" onClick={() => onOpen?.(asset, 'publish')} className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.06] px-3 py-2 text-[10px] font-bold text-emerald-100"><Play size={11} className="mr-1 inline" /> Publish</button>}
                     <a href={asset.url} target="_blank" rel="noreferrer" className="rounded-lg border border-white/[0.1] px-3 py-2 text-[10px] font-bold text-white/60 hover:text-white">Open</a>
                   </div>

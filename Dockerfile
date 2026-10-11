@@ -4,16 +4,12 @@ WORKDIR /app
 # Install dependencies
 FROM base AS deps
 COPY package*.json ./
-COPY packages/Vibe-Workflow/packages/workflow-builder/package*.json ./packages/Vibe-Workflow/packages/workflow-builder/
-COPY packages/Open-Poe-AI/packages/agents/package*.json ./packages/Open-Poe-AI/packages/agents/
-COPY packages/Open-AI-Design-Agent/packages/design-agent/package*.json ./packages/Open-AI-Design-Agent/packages/design-agent/
 COPY packages/studio/package*.json ./packages/studio/
-RUN npm install
+RUN npm ci --ignore-scripts --no-audit --no-fund
 
-# Build sub-packages
+# Build the application directly from workspace source
 FROM deps AS builder
 COPY . .
-RUN npm run build:packages
 RUN npm run build
 
 # Production runner
@@ -23,6 +19,7 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/packages/studio ./packages/studio
 
 EXPOSE 3000
 CMD ["npm", "start"]

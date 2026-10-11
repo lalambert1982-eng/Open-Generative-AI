@@ -231,3 +231,18 @@ test('starting a workflow cannot bypass the approval boundary even if the model 
     assert.equal(plan.suggestedActions[0].requiresApproval, false);
     assert.equal(plan.requiresApproval, false);
 });
+
+test('Selena rejects removed Graphic Studio actions and opens retained Workflow Execution', () => {
+    const plan = normalizeSelenaPlan({
+        structuredOutput: {
+            suggestedActions: [
+                { action: 'graphic.open', parameters: { assetId } },
+                { action: 'workflow.open', parameters: { workflowId: 'run-123' } },
+            ],
+        },
+    });
+    assert.deepEqual(plan.suggestedActions.map((item) => item.action), ['workflow.open']);
+    assert.equal(plan.suggestedActions[0].destination, '/studio/apps/workflow-run');
+    assert.equal(plan.suggestedActions[0].parameters.workflowId, 'run-123');
+    assert.equal(plan.suggestedActions[0].requiresApproval, false);
+});

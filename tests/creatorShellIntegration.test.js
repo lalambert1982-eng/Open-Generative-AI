@@ -18,21 +18,6 @@ test('direct image and video creation reuse the project media request implementa
     assert.match(creator, /initialAsset\.url/);
 });
 
-test('Graphic Studio consolidates existing canvas, image editor, and layer components', async () => {
-    const graphic = await read('../packages/studio/src/components/GraphicStudio.jsx');
-    const image = await read('../packages/studio/src/components/ImageStudio.jsx');
-    const draw = await read('../packages/studio/src/components/DrawModal.jsx');
-    assert.match(graphic, /DesignAgentStudio/);
-    assert.match(graphic, /ImageStudio/);
-    assert.match(graphic, /LayersStudio/);
-    assert.match(graphic, /mode === "canvas"/);
-    assert.match(graphic, /owner-authenticated Creator server adapter/i);
-    assert.match(graphic, /initialAsset=\{initialAsset\}/);
-    assert.match(image, /initialAsset\?\.type !== "image"/);
-    assert.match(image, /Use the secure Creator Image tool to generate/);
-    assert.match(draw, /initialImageUrl/);
-});
-
 test('Projects and Assets use the authenticated durable Project API with owner-scoped handoff', async () => {
     const shell = await read('../components/StandaloneShell.js');
     const projects = await read('../components/ProjectsStudio.js');
@@ -84,23 +69,9 @@ test('Storyboard persistence produces a versioned timeline boundary without clai
     assert.doesNotMatch(timeline, /ffmpeg|renderVideo|composeVideo/);
 });
 
-test('legacy Agent Builder routes through Studio-contained Agent Blueprints paths', async () => {
-    const agents = await read('../packages/studio/src/components/AgentStudio.jsx');
-    const shell = await read('../components/StandaloneShell.js');
-    assert.match(agents, /basePath = "\/agents"/);
-    assert.match(shell, /basePath="\/studio\/advanced\/agents"/);
-    assert.doesNotMatch(shell, /window\.history\.pushState|window\.location\.reload/);
-});
-
-test('asset handoff populates Graphic Studio, Storyboard, and Lip Sync without requiring a URL copy', async () => {
+test('asset handoff populates the retained Storyboard without requiring a URL copy', async () => {
     const storyboard = await read('../packages/studio/src/components/StoryboardWorkspace.jsx');
-    const lipSync = await read('../packages/studio/src/components/LipSyncStudio.jsx');
-    const shell = await read('../components/StandaloneShell.js');
     assert.match(storyboard, /initialAsset\.type === 'image'/);
-    assert.match(lipSync, /setVideoUrl\(initialAsset\.url\)/);
-    assert.match(lipSync, /setImageUrl\(initialAsset\.url\)/);
-    assert.match(shell, /'graphic-studio': '\/studio\/apps\/graphic-studio'/);
-    assert.match(shell, /<GraphicStudio[^>]*initialAsset=\{handoffAsset\}/);
 });
 
 test('no new provider key is embedded in the integrated shell or secure Creator client', async () => {
@@ -109,22 +80,21 @@ test('no new provider key is embedded in the integrated shell or secure Creator 
     assert.doesNotMatch(shell, /MUAPI_(?:API_KEY|PRODUCTION_API_KEY)\s*=/);
     assert.doesNotMatch(creator, /x-api-key/);
     assert.match(creator, /Provider keys never enter the browser/);
+    assert.doesNotMatch(shell, /window\.history\.pushState|window\.location\.reload/);
 });
 
-test('legacy credentials are requested inside the Creator shell instead of replacing navigation', async () => {
+test('provider settings are read-only within the Creator shell', async () => {
     const shell = await read('../components/StandaloneShell.js');
-    assert.doesNotMatch(shell, /return <ApiKeyModal/);
-    assert.match(shell, /LEGACY_DESTINATIONS\.has\(destinationId\).*requiredFor=\{destination\.label\}/s);
-    assert.doesNotMatch(shell.match(/const LEGACY_DESTINATIONS = new Set\(\[([\s\S]*?)\]\);/)?.[1] || '', /graphic-studio|graphics/);
+    const settings = await read('../components/LegacyProviderSettings.js');
+    assert.doesNotMatch(shell, /return <ApiKeyModal|LEGACY_DESTINATIONS|muapi_key/);
+    assert.match(shell, /case 'provider-settings': return <LegacyProviderSettings \/>/);
+    assert.match(settings, /Server-managed providers/);
+    assert.doesNotMatch(settings, /<form|<input|onSave|onClear|sessionStorage|localStorage/);
 });
 
-test('Music Video reuses the real Storyboard workspace and Workflow exits without a reload loop', async () => {
+test('Music Video reuses the retained Storyboard workspace', async () => {
     const shell = await read('../components/StandaloneShell.js');
-    const workflow = await read('../packages/studio/src/components/WorkflowStudio.jsx');
-    const workflowUi = await read('../packages/studio/src/components/WorkflowUI.jsx');
     assert.match(shell, /case 'music-video': return <CreatorStudio[^>]*initialToolId="storyboard"/);
-    assert.doesNotMatch(workflow, /window\.location\.reload|fromWorkflowBuilder/);
-    assert.doesNotMatch(workflowUi, /fromWorkflowBuilder|sessionStorage/);
 });
 
 test('unified Publish preserves direct YouTube and adds secure Asset handoff for Instagram and TikTok', async () => {
@@ -181,9 +151,7 @@ test('Workflow Execution reuses the Creator Studio shell instead of a second Wor
     assert.match(creator, /<WorkflowRunPanel[\s\S]*?request=\{request\}/);
     assert.match(creator, /<WorkflowRunPanel[\s\S]*?onProjectChange=\{onProjectChange\}/);
 
-    // The legacy MuAPI-hosted Workflows product (WorkflowStudio/Vibe-Workflow) is
-    // left untouched and distinct from the new project-scoped destination.
-    assert.match(shell, /case 'workflows': return <WorkflowStudio/);
+    assert.doesNotMatch(shell, /WorkflowStudio|case 'workflows':/);
     assert.match(shell, /case 'workflow-run': return <CreatorStudio[\s\S]*?initialToolId="workflow"/);
     assert.match(nav, /id: 'workflow-run', label: 'Workflow Run', path: '\/studio\/apps\/workflow-run'/);
 
