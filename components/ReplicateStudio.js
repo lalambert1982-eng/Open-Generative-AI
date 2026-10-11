@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { AlertTriangle, CheckCircle2, Download, Loader2 } from 'lucide-react';
-import { createReplicateApi, createReplicateController } from '@/src/lib/replicateStudioClient.js';
+import { createReplicateApi, createReplicateController, fetchSessionUserId } from '@/src/lib/replicateStudioClient.js';
+import { createBrowserResume, clearReplicateResume } from '@/src/lib/replicateResume.js';
+import { createBrowserUncertainty, clearReplicateUncertainty } from '@/src/lib/replicateUncertainty.js';
 import { assetChoices, fieldLabel } from '@/src/lib/replicateStudioForm.js';
 import { deriveView } from '@/src/lib/replicateStudioView.js';
 
@@ -93,35 +95,62 @@ function Field({ name, spec, value, error, disabled, choices, onChange }) {
 
 export default function ReplicateStudio({ kind, project, assets = [], onJobSettled, onAuthLost, onBusyChange }) {
   const [controller, setController] = useState(null);
+  const [sessionError, setSessionError] = useState('');
   const callbacks = useRef({});
   callbacks.current = { onJobSettled, onAuthLost };
 
   useEffect(() => {
-    const next = createReplicateController({
-      api: createReplicateApi(),
-      kind,
-      onJobSettled: (event) => callbacks.current.onJobSettled?.(event),
-      onAuthLost: () => callbacks.current.onAuthLost?.(),
-    });
-    setController(next);
-    next.load();
-    return () => next.teardown();
+    let cancelled = false;
+    let next = null;
+    setController(null);
+    setSessionError('');
+    (async () => {
+      const userId = await fetchSessionUserId();
+      if (cancelled) return;
+      if (userId === null) {
+        setSessionError('Could not verify your session. Reload to check again before generating.');
+        return;
+      }
+      if (!userId) {
+        clearReplicateResume();
+        clearReplicateUncertainty();
+        setSessionError('Sign in again before generating.');
+        callbacks.current.onAuthLost?.();
+        return;
+      }
+      next = createReplicateController({
+        api: createReplicateApi(),
+        kind,
+        resume: userId ? createBrowserResume(kind) : null,
+        uncertainty: userId ? createBrowserUncertainty(kind) : null,
+        userId,
+        onJobSettled: (event) => callbacks.current.onJobSettled?.(event),
+        onAuthLost: () => callbacks.current.onAuthLost?.(),
+      });
+      setController(next);
+      next.load();
+    })();
+    return () => { cancelled = true; next?.teardown(); };
   }, [kind]);
 
   const subscribe = useCallback((listener) => (controller ? controller.subscribe(listener) : () => {}), [controller]);
   const getSnapshot = useCallback(() => (controller ? controller.getState() : null), [controller]);
-  const state = useSyncExternalStore(subscribe, getSnapshot, () => null);
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot, () => null);
+  const state = controller?.getState().kind === kind ? snapshot : null;
 
   useEffect(() => { controller?.setProject(project?.id || ''); }, [controller, project?.id]);
 
   const view = state ? deriveView(state) : null;
   useEffect(() => { onBusyChange?.(Boolean(view?.locked)); }, [view?.locked, onBusyChange]);
 
+  if (sessionError) return <div role="alert" className="p-8 text-sm text-red-200">{sessionError}</div>;
   if (!state || !view) return <div className="p-8 text-sm text-white/40">Loading Replicate models…</div>;
 
   const model = state.models.find((item) => item.id === state.modelId);
   const choices = assetChoices(assets);
   const editable = !view.locked;
+  const originalProject = Boolean(state.jobProjectId && state.jobProjectId !== project?.id
+    && (state.phase === 'running' || state.phase === 'uncertain' || view.result));
   const onPrimary = () => (view.primary.action === 'confirm' ? controller.confirm() : controller.generate());
 
   return (
@@ -132,7 +161,7 @@ export default function ReplicateStudio({ kind, project, assets = [], onJobSettl
             <h1 className="text-2xl font-semibold tracking-tight">{kind === 'video' ? 'Video' : 'Image'} · Replicate</h1>
             <span className={`rounded-full border px-3 py-1 text-[11px] font-bold ${BADGE_CLASS[view.badge.tone]}`}>{view.badge.text}</span>
           </div>
-          <p className="text-xs text-white/35">{project ? <>Results are saved to <strong className="text-white/60">{project.name}</strong>.</> : 'Open a Project to save results.'}</p>
+          <p className="text-xs text-white/35">{originalProject ? 'This generation belongs to its original Project.' : project ? <>Results are saved to <strong className="text-white/60">{project.name}</strong>.</> : 'Open a Project to save results.'}</p>
 
           {state.models.length > 0 && (
             <div>

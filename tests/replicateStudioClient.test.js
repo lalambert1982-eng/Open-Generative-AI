@@ -71,3 +71,54 @@ test('non-JSON error bodies fall back to a status message', async () => {
     const { fetchImpl } = fakeFetch(() => new Response('<html>', { status: 500 }));
     await assert.rejects(createReplicateApi({ fetchImpl }).models(), /Request failed \(500\)/);
 });
+
+for (const status of [502, 503, 504]) {
+    test(`an unreadable HTTP ${status} generate reply has an unknown outcome`, async () => {
+        const api = createReplicateApi({ fetchImpl: async () => new Response('<html>proxy failure</html>', { status }) });
+        await assert.rejects(api.generate({ model: 'a/b', input: {}, projectId: 'p' }),
+            (error) => error instanceof ReplicateApiError && error.status === status && error.outcomeUnknown === true);
+    });
+    test(`a structured definite HTTP ${status} rejection remains a definite error`, async () => {
+        const api = createReplicateApi({ fetchImpl: async () => json(status, { error: 'Not configured.', generationAccepted: false }) });
+        await assert.rejects(api.generate({ model: 'a/b', input: {}, projectId: 'p' }),
+            (error) => error.message === 'Not configured.' && error.outcomeUnknown === false);
+    });
+}
+
+for (const value of [null, [], 'unexpected', {}, { error: 42 }]) {
+    test(`an unexpected generate error body ${JSON.stringify(value)} has an unknown outcome`, async () => {
+        const api = createReplicateApi({ fetchImpl: async () => json(502, value) });
+        await assert.rejects(api.generate({ model: 'a/b', input: {}, projectId: 'p' }),
+            (error) => error instanceof ReplicateApiError && error.outcomeUnknown === true);
+    });
+}
+
+for (const status of [500, 502, 503, 504]) {
+    test(`a generic JSON HTTP ${status} generate error does not prove rejection`, async () => {
+        const api = createReplicateApi({ fetchImpl: async () => json(status, { error: 'Gateway timeout' }) });
+        await assert.rejects(api.generate({ model: 'a/b', input: {}, projectId: 'p' }),
+            (error) => error.status === status && error.outcomeUnknown === true);
+    });
+}
+
+for (const evidence of [{ generationAccepted: false }, { outcomeUnknown: false }]) {
+    test(`explicit non-acceptance evidence ${JSON.stringify(evidence)} keeps a JSON 500 definite`, async () => {
+        const api = createReplicateApi({ fetchImpl: async () => json(500, { error: 'Request rejected.', ...evidence }) });
+        await assert.rejects(api.generate({ model: 'a/b', input: {}, projectId: 'p' }),
+            (error) => error.outcomeUnknown === false && error.generationAccepted === false);
+    });
+}
+
+test('an explicit unknown outcome overrides non-acceptance evidence', async () => {
+    const api = createReplicateApi({ fetchImpl: async () => json(504, {
+        error: 'Timed out.', generationAccepted: false, outcomeUnknown: true,
+    }) });
+    await assert.rejects(api.generate({ model: 'a/b', input: {}, projectId: 'p' }),
+        (error) => error.outcomeUnknown === true);
+});
+
+test('a structured client-error rejection remains definite without acceptance fields', async () => {
+    const api = createReplicateApi({ fetchImpl: async () => json(409, { error: 'Duplicate request.' }) });
+    await assert.rejects(api.generate({ model: 'a/b', input: {}, projectId: 'p' }),
+        (error) => error.status === 409 && error.outcomeUnknown === false);
+});

@@ -1,36 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-    agentBlueprintPath,
-    resolveStudioDestination,
-    STUDIO_NAVIGATION,
-} from '../src/lib/studioNavigation.js';
+import { resolveStudioDestination, studioDestination, STUDIO_NAVIGATION } from '../src/lib/studioNavigation.js';
 
-test('Creator Studio routes resolve the integrated hierarchy and legacy aliases', () => {
+const retained = ['home', 'selena', 'image', 'video', 'audio', 'avatar', 'generator', 'scene-builder', 'music-video', 'workflow-run', 'agent-team', 'projects', 'assets', 'publish', 'provider-settings'];
+
+test('Creator Studio routes resolve every retained destination and core alias', () => {
     assert.equal(resolveStudioDestination([]), 'home');
-    assert.equal(resolveStudioDestination(['selena']), 'selena');
-    assert.equal(resolveStudioDestination(['tools', 'image']), 'image');
-    assert.equal(resolveStudioDestination(['apps', 'scene-builder']), 'scene-builder');
-    assert.equal(resolveStudioDestination(['apps', 'music-video']), 'music-video');
-    assert.equal(resolveStudioDestination(['apps', 'workflow-run']), 'workflow-run');
-    assert.equal(resolveStudioDestination(['projects']), 'projects');
-    assert.equal(resolveStudioDestination(['advanced', 'agents', 'create']), 'agent-blueprints');
-    assert.equal(resolveStudioDestination(['creator']), 'selena');
-    assert.equal(resolveStudioDestination(['agents']), 'agent-blueprints');
-    assert.equal(resolveStudioDestination(['design-agent']), 'graphic-studio');
+    for (const destination of STUDIO_NAVIGATION) {
+        assert.equal(resolveStudioDestination(destination.path.slice('/studio/'.length).split('/')), destination.id);
+        assert.equal(studioDestination(destination.id), destination);
+    }
+    for (const [alias, id] of [['creator', 'selena'], ['storyboard', 'scene-builder'], ['image', 'image'], ['video', 'video'], ['audio', 'audio'], ['music-video', 'music-video']]) {
+        assert.equal(resolveStudioDestination([alias]), id);
+    }
 });
 
-test('Agent Blueprint paths stay inside the Studio shell', () => {
-    assert.equal(agentBlueprintPath(), '/studio/advanced/agents');
-    assert.equal(agentBlueprintPath('create'), '/studio/advanced/agents/create');
-    assert.equal(agentBlueprintPath('/agent-123/chat-456'), '/studio/advanced/agents/agent-123/chat-456');
+test('removed studio destinations and unknown paths fall back to Home', () => {
+    for (const path of ['advanced/agents/create', 'advanced/marketplace', 'agents', 'design-agent', 'cinema', 'layers', 'apps/influencer', 'apps/graphic-studio', 'apps/marketing', 'apps/edit-studio', 'tools/graphics', 'tools/lip-sync', 'tools/music', 'tools/video-advanced', 'tools/motion', 'tools/transform', 'tools/smart-clip', 'workflows', 'unknown']) {
+        assert.equal(resolveStudioDestination(path.split('/')), 'home', path);
+    }
+    assert.equal(studioDestination('unknown').id, 'home');
 });
 
-test('navigation contains one stable destination per required working area', () => {
+test('navigation contains exactly one stable destination per retained working area', () => {
     const ids = STUDIO_NAVIGATION.map((item) => item.id);
     assert.equal(new Set(ids).size, ids.length);
-    for (const id of ['home', 'selena', 'image', 'video', 'audio', 'graphic-studio', 'scene-builder', 'music-video', 'workflows', 'workflow-run', 'projects', 'assets', 'publish', 'agent-blueprints', 'marketplace']) {
-        assert.ok(ids.includes(id), `missing ${id}`);
-    }
+    assert.deepEqual(ids, retained);
 });

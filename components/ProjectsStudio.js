@@ -6,7 +6,6 @@ import {
   Boxes,
   Clapperboard,
   FolderOpen,
-  LayoutGrid,
   LoaderCircle,
   Pencil,
   Plus,
@@ -19,7 +18,6 @@ const PROJECT_ACTIONS = [
   { label: 'Ask Selena', description: 'Plan the next creative step with this Project in context.', path: '/studio/selena', icon: Bot },
   { label: 'Create Media', description: 'Generate an image or video and save the result here.', path: '/studio/apps/generator', icon: WandSparkles },
   { label: 'Build Storyboard', description: 'Create connected scenes using this Project and its Assets.', path: '/studio/apps/scene-builder', icon: Clapperboard },
-  { label: 'Graphic Studio', description: 'Design or edit graphics using Project Assets.', path: '/studio/apps/graphic-studio', icon: LayoutGrid },
   { label: 'View Assets', description: 'Upload, review, and reuse everything saved to this Project.', path: '/studio/assets', icon: Boxes },
   { label: 'Prepare Publish', description: 'Prepare an approved Project Asset for social publishing.', path: '/studio/publish', icon: Share2 },
 ];

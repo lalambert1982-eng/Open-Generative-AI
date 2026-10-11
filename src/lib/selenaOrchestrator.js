@@ -30,14 +30,6 @@ export const SELENA_ACTION_REGISTRY = Object.freeze({
         sideEffect: 'Image-to-video generation may incur provider cost when paid generation is enabled.',
         fields: Object.freeze(['prompt', 'aspectRatio', 'duration', 'assetId']),
     }),
-    'graphic.open': Object.freeze({
-        label: 'Open Graphic Studio',
-        destination: '/studio/apps/graphic-studio',
-        requiresApproval: false,
-        available: true,
-        sideEffect: null,
-        fields: Object.freeze(['assetId']),
-    }),
     'storyboard.create': Object.freeze({
         label: 'Open Scene Builder',
         destination: '/studio/apps/scene-builder',
@@ -55,8 +47,8 @@ export const SELENA_ACTION_REGISTRY = Object.freeze({
         fields: Object.freeze(['prompt', 'aspectRatio', 'duration', 'assetId']),
     }),
     'workflow.open': Object.freeze({
-        label: 'Open Workflows',
-        destination: '/studio/workflows',
+        label: 'Open Workflow Run',
+        destination: '/studio/apps/workflow-run',
         requiresApproval: false,
         available: true,
         sideEffect: null,

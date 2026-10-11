@@ -79,3 +79,59 @@ test('Home shows recent Project Assets and enabled models without breaking the S
     assert.match(home, /\['image',\s*'video',\s*'graphic'\]\.includes\(asset\.type\)/);
     assert.match(shell, /<CreatorHome onNavigate=\{navigate\}[^]*?recentAssets=\{assets/);
 });
+
+
+test('fetchSessionUserId trusts only explicit authentication and scalar identity', async () => {
+    const client = await import('../src/lib/replicateStudioClient.js');
+    assert.equal(typeof client.fetchSessionUserId, 'function');
+    const calls = [];
+    const readIdentity = (value, ok = true) => client.fetchSessionUserId({ fetchImpl: async (...args) => {
+        calls.push(args); return { ok, json: async () => value };
+    } });
+    assert.equal(await readIdentity({ authenticated: true, user: { id: 42 } }), '42');
+    assert.equal(await readIdentity({ authenticated: true, user: { id: 'owner-42' } }), 'owner-42');
+    for (const authenticated of [undefined, 'true', 1]) {
+        assert.equal(await readIdentity({ authenticated, user: { id: 42 } }), null);
+    }
+    for (const id of [undefined, null, '', '  ', {}, [], true, NaN, Infinity]) {
+        assert.equal(await readIdentity({ authenticated: true, user: { id } }), null);
+    }
+    assert.equal(await readIdentity({ authenticated: true, user: { id: 42 } }, false), null);
+    assert.equal(await client.fetchSessionUserId({ fetchImpl: async () => { throw Error('offline'); } }), null);
+    assert.equal(await client.fetchSessionUserId({ fetchImpl: async () => ({ ok: true, json: async () => { throw Error('not json'); } }) }), null);
+    assert.equal(await readIdentity({ authenticated: false }), '');
+    assert.equal(await client.fetchSessionUserId({ fetchImpl: async () => ({ ok: false, status: 401 }) }), '');
+    assert.deepEqual(calls[0], ['/api/auth/session', { credentials: 'same-origin', cache: 'no-store' }]);
+});
+
+test('ReplicateStudio waits for session identity and discards stale async controllers', async () => {
+    const component = await read('../components/ReplicateStudio.js');
+    assert.match(component, /await fetchSessionUserId\(\)/);
+    assert.match(component, /resume: userId \? createBrowserResume\(kind\) : null/);
+    assert.match(component, /if \(cancelled\) return/);
+    assert.match(component, /setController\(null\)/);
+    assert.match(component, /controller\?\.getState\(\).kind === kind/);
+    assert.match(component, /cancelled = true/);
+    assert.match(component, /next\?\.teardown\(\)/);
+    assert.match(component, /clearReplicateResume/);
+});
+
+test('logout clears both pointers through the shared helper before requesting logout', async () => {
+    const creator = await read('../packages/studio/src/components/CreatorStudio.jsx');
+    const signOut = creator.slice(creator.indexOf('const signOut = async'), creator.indexOf('const updateDraft'));
+    assert.match(creator, /import .*clearReplicateResume.*replicateResume/);
+    assert.ok(signOut.indexOf('clearReplicateResume()') >= 0);
+    assert.ok(signOut.indexOf('clearReplicateResume()') < signOut.indexOf('"/api/auth/logout"'));
+});
+
+test('resume identity storage contains no request content or credentials', async () => {
+    const source = await read('../src/lib/replicateResume.js');
+    assert.doesNotMatch(source, /prompt|quoteToken|outputUrl|apiKey|REPLICATE_API_TOKEN/i);
+});
+
+
+test('a resumed generation is labelled with its original project rather than the current selection', async () => {
+    const component = await read('../components/ReplicateStudio.js');
+    assert.match(component, /state\.jobProjectId !== project\?\.id/);
+    assert.match(component, /This generation belongs to its original Project/);
+});

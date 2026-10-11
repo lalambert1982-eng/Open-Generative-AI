@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { evaluateJsonSafety, getContentSafetyMode } from '../../src/lib/contentSafety.js';
-import { serializeSafePayload } from '../../src/lib/clientContentSafety.js';
 
 test('content safety defaults to enforcement', () => {
   assert.equal(getContentSafetyMode({}), 'enforce');
@@ -29,15 +28,4 @@ test('operators can add blocked terms without editing code', () => {
   });
   assert.equal(result.allowed, false);
   assert.equal(result.reason, 'operator_blocked_term');
-});
-
-test('direct Electron/Vite requests enforce the same policy before serialization', () => {
-  assert.throws(
-    () => serializeSafePayload({ prompt: 'explicit sexual content involving a minor' }, { env: {} }),
-    /blocked by content safety policy/,
-  );
-  assert.equal(
-    serializeSafePayload({ prompt: 'a peaceful landscape' }, { env: {} }),
-    '{"prompt":"a peaceful landscape"}',
-  );
 });

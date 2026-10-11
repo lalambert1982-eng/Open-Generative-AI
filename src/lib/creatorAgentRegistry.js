@@ -3,7 +3,7 @@ const AGENT_ID_PATTERN = /^[a-z][a-z0-9-]{1,60}$/;
 // Server-owned catalog of the "G.FURY Creator Team" MuAPI Agent Blueprints that Selena
 // is allowed to delegate to. This registry does NOT create a new agent framework: every
 // entry is provisioned through the existing MuAPI Agent Blueprints API
-// (createAgent/getUserAgents/sendAgentChatMessage in packages/studio/src/muapi.js).
+// (createAgent/getUserAgents/sendAgentChatMessage in src/lib/muapiAgents.js).
 // The model is NEVER allowed to supply an arbitrary external agent id or slug — only
 // these fixed internal ids are ever accepted from a Selena plan, and the corresponding
 // MuAPI agent is resolved server-side by exact provisionName match (see

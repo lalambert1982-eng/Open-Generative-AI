@@ -12,11 +12,10 @@ import { mock } from 'node:test';
 import { createCreatorSession, creatorCookieSettings } from '../src/lib/creatorAuth.js';
 import { creatorProjectStoreForTests } from '../src/lib/creatorProjectStore.js';
 import { resetRateLimitStore } from '../src/lib/rateLimit.js';
+import { authorizeCreatorRequest, creatorJson } from '../src/lib/creatorProviderGateway.js';
 
 const gatewayUrl = new URL('../src/lib/replicateGateway.js', import.meta.url);
 const projectRoutesUrl = new URL('../src/lib/creatorProjectRoutes.js', import.meta.url);
-const realGateway = await import(gatewayUrl);
-const realProjects = await import(projectRoutesUrl);
 const nativeFetch = globalThis.fetch;
 const PORT = Number(process.env.FIXTURE_PORT || 4010);
 const env = {
@@ -33,7 +32,6 @@ const env = {
     REPLICATE_LIVE_ENABLED: 'false',
 };
 const owner = { id: 12345678, login: 'fixture-owner' };
-const other = { id: 87654321, login: 'other-owner' };
 const blobStore = creatorProjectStoreForTests(new Map());
 const media = new Map();
 let uploadUnavailable = false;
@@ -51,6 +49,9 @@ let counter = 0;
 let stubCalls = 0;
 let forbiddenFetches = 0;
 let providerBehavior = 'never';
+let holdSubmissions = false;
+const heldJobs = new Map();
+const traffic = { generate: 0, status: 0, quote: 0, statusByJob: {} };
 const predictionId = 'abc123def456ghi789jkl012mn';
 const ctx = {
     env, blobStore, assetBlobStore,
@@ -70,12 +71,51 @@ const ctx = {
     },
 };
 
+// Extend only the fixture's injected provider boundary. A real mock job record
+// is saved as queued, and the normal status handler settles it after release.
+const providerUrl = new URL('../src/lib/replicateProvider.js', import.meta.url);
+const realProvider = await import(providerUrl);
+mock.module(providerUrl.href, {
+    cache: true,
+    namedExports: {
+        ...realProvider,
+        async submitReplicateJob(...args) {
+            const result = await realProvider.submitReplicateJob(...args);
+            if (!holdSubmissions || !result.ok || !result.job.mock) return result;
+            return { ...result, status: 202, job: { ...result.job, status: 'queued' } };
+        },
+    },
+});
+const realGateway = await import(gatewayUrl);
+const realProjects = await import(projectRoutesUrl);
+
+async function fixtureGateway(name, handler, request, options) {
+    const context = { ...ctx, ...options };
+    if (name === 'handleReplicateStatus') {
+        const auth = authorizeCreatorRequest(request, { env, action: 'replicate-status', statusRequest: true });
+        if (auth.response) return auth.response;
+        const jobId = new URL(request.url).searchParams.get('id');
+        const held = heldJobs.get(jobId);
+        if (held && held.userId === String(auth.user.id)) {
+            if (held.missing) return creatorJson({ error: 'Generation job not found.' }, 404);
+            if (!held.released) return creatorJson({ job: { ...held.job, status: 'running' } });
+        }
+    }
+    const response = await handler(request, context);
+    if (name === 'handleReplicateGenerate' && response.status === 202) {
+        const { job } = await response.clone().json();
+        const auth = authorizeCreatorRequest(request, { env, action: 'fixture-generated', statusRequest: true });
+        if (job?.mock && auth.user) heldJobs.set(job.jobId, { job, userId: String(auth.user.id), released: false, missing: false });
+    }
+    return response;
+}
+
 // Only the dependency boundary is replaced. Dispatch, auth, validation,
 // provider, guard, persistence and Project handlers are the real implementation.
 mock.module(gatewayUrl.href, {
     cache: true,
     namedExports: Object.fromEntries(Object.entries(realGateway).map(([name, handler]) => [name,
-        (request, options = {}) => handler(request, { ...ctx, ...options }),
+        (request, options = {}) => fixtureGateway(name, handler, request, options),
     ])),
 });
 mock.module(projectRoutesUrl.href, {
@@ -106,6 +146,23 @@ const server = createServer(async (incoming, outgoing) => {
             ...(['GET', 'HEAD'].includes(method) ? {} : { body: Buffer.concat(bytes) }),
         });
         const pathname = new URL(request.url).pathname;
+        if (pathname === '/api/creator/__fixture/stats' && method === 'GET') {
+            outgoing.writeHead(200, { 'content-type': 'application/json' });
+            outgoing.end(JSON.stringify({ ...traffic, forbiddenFetches, stubCalls, heldJobs: heldJobs.size, mode: env.GENERATION_MODE }));
+            return;
+        }
+        if (pathname === '/api/creator/__fixture/control' && method === 'POST') {
+            const body = JSON.parse(Buffer.concat(bytes).toString());
+            if (body.action === 'hold') holdSubmissions = true;
+            else if (body.action === 'release' || body.action === 'missing') {
+                const held = heldJobs.get(body.jobId);
+                if (!held) { outgoing.writeHead(404); outgoing.end(JSON.stringify({ error: 'No held fixture job.' })); return; }
+                held[body.action === 'release' ? 'released' : 'missing'] = true;
+            } else { outgoing.writeHead(400); outgoing.end(JSON.stringify({ error: 'Unknown fixture control.' })); return; }
+            outgoing.writeHead(200, { 'content-type': 'application/json' });
+            outgoing.end(JSON.stringify({ ok: true }));
+            return;
+        }
         if (pathname === '/api/creator/__fixture/login') {
             const cookie = `${creatorCookieSettings(env).sessionName}=${createCreatorSession(owner, { env })}; Path=/; HttpOnly; SameSite=Lax`;
             outgoing.writeHead(302, { 'set-cookie': cookie, location: '/studio' });
@@ -120,6 +177,15 @@ const server = createServer(async (incoming, outgoing) => {
             return;
         }
         const path = pathname.split('/').slice(3);
+        if (path[0] === 'replicate') {
+            if (path[1] === 'generate' && method === 'POST') traffic.generate += 1;
+            if (path[1] === 'quote' && method === 'POST') traffic.quote += 1;
+            if (path[1] === 'status' && method === 'GET') {
+                traffic.status += 1;
+                const id = new URL(request.url).searchParams.get('id');
+                traffic.statusByJob[id] = (traffic.statusByJob[id] || 0) + 1;
+            }
+        }
         if (!pathname.startsWith('/api/creator/') || !['projects', 'replicate'].includes(path[0]) || typeof route[method] !== 'function') {
             outgoing.writeHead(404, { 'content-type': 'application/json' });
             outgoing.end(JSON.stringify({ error: 'Not a fixture route.' }));

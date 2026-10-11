@@ -23,6 +23,8 @@ import {
   UserRound,
   WandSparkles,
 } from "lucide-react";
+import { clearReplicateResume } from "@/src/lib/replicateResume.js";
+import { clearReplicateUncertainty } from "@/src/lib/replicateUncertainty.js";
 import StoryboardWorkspace from "./StoryboardWorkspace";
 import WorkflowRunPanel from "./WorkflowRunPanel";
 import { buildProjectMediaRequest } from "./storyboardWorkspaceModel";
@@ -1099,6 +1101,8 @@ export default function CreatorStudio({
 
   const signOut = async () => {
     generationTokenRef.current += 1;
+    clearReplicateResume();
+    clearReplicateUncertainty();
     try {
       const response = await fetch("/api/auth/logout", {
         method: "POST",

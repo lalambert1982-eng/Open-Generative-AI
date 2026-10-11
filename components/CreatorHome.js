@@ -1,18 +1,15 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowRight, Bot, Film, Image, LayoutGrid, Megaphone, Music2, Sparkles, UserRound } from 'lucide-react';
+import { ArrowRight, Bot, Film, Image, Music2, Sparkles } from 'lucide-react';
 import { createReplicateApi } from '@/src/lib/replicateStudioClient.js';
 
 const ACTIONS = [
   { label: 'AI Generator', path: '/studio/apps/generator', icon: Sparkles, copy: 'Create an image or video without choosing a provider.' },
-  { label: 'AI Influencer', path: '/studio/apps/influencer', icon: UserRound, copy: 'Build reusable influencer visuals.' },
   { label: 'Music Video', path: '/studio/apps/music-video', icon: Music2, copy: 'Plan connected scenes for a music-led visual.' },
   { label: 'Scene Builder', path: '/studio/apps/scene-builder', icon: Film, copy: 'Create a connected visual storyboard.' },
   { label: 'Image', path: '/studio/tools/image', icon: Image, copy: 'Generate a secure image asset.' },
   { label: 'Video', path: '/studio/tools/video', icon: Film, copy: 'Generate from text or animate a first frame.' },
-  { label: 'Graphic Design', path: '/studio/apps/graphic-studio', icon: LayoutGrid, copy: 'Open the consolidated graphics workspace.' },
-  { label: 'Social Campaign', path: '/studio/apps/marketing', icon: Megaphone, copy: 'Prepare campaign creative and copy.' },
 ];
 
 export default function CreatorHome({ onNavigate, onAskSelena, recentAssets = [] }) {
