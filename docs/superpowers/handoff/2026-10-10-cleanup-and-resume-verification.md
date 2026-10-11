@@ -27,7 +27,7 @@ Local work on `rebuild/creator-studio-replicate`, continued on 2026-10-10 from `
 | Removed routes | No `/workflow`, `/agents`, `/assistant`, `/api/v1`, `/api/workflow`, or `/api/agents` entries in built app manifest |
 | Compiled CSS | 43,079 bytes versus 223,513-byte pre-cleanup baseline; retained cyan-button utility present |
 | Independent security/code review | No Critical or Important findings in reviewed cleanup, auth, recovery, and polling changes |
-| Mocked browser | Final execution pending; see continuation below |
+| Mocked browser | 4/4 passed on 2026-10-11 (`scripts/replicate-resume-browser-smoke.mjs`): 6 generate / 6 status calls, 0 provider calls, 1 external URL intercepted and blocked. The script browses via `localhost` because `next dev` reports `request.url` as localhost, which made the same-origin logout guard reject a 127.0.0.1 Origin; production hosts are unaffected. |
 
 Suite counts overlap; do not sum them as unique tests. Compared with the recorded baseline, security changed from 318 to 299: 24 previous test names were removed/replaced and 5 added, covering removal of obsolete BYOK/upload/Canvas/Electron paths and stronger retained guards. Top-level tests changed from 111 to 205: 29 names removed/replaced and 123 added across recovery, submission uncertainty, race handling, fixture, and cleanup guards. Shell changed from 25 to 26; UI changed from 65 to 178, including the newly registered uncertainty-store tests. Integration and HTTP counts remain 6 and 11.
 
