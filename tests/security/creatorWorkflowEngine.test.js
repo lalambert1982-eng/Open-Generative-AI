@@ -332,6 +332,49 @@ test('a completed scene-linked node writes its output back into the Storyboard s
     assert.equal(reloaded.storyboard.scenes[0].imageUrl, finished.run.nodes[0].outputUrl);
 });
 
+test('a completed scene-linked node does not overwrite a scene the user has since edited with a different prompt', async () => {
+    const blobStore = creatorProjectStoreForTests(new Map());
+    await setupProject(projectAId, owner, blobStore);
+    await saveCreatorStoryboard(owner, projectAId, {
+        storyboard: {
+            scenes: [{ id: 'scene-1', title: 'Opening', prompt: 'sunrise over the harbor', aspectRatio: '16:9' }],
+        },
+    }, { env, blobStore, now: Date.UTC(2026, 0, 2) });
+
+    const idGenerator = sequentialIdGenerator('node');
+    const { run } = await createWorkflowRun(owner, projectAId, { source: 'storyboard' }, {
+        env, blobStore, idGenerator, now: Date.UTC(2026, 0, 3),
+    });
+
+    const fetchImpl = succeedingFetch();
+    await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl, now: Date.UTC(2026, 0, 4) });
+    await approveWorkflowNode(owner, projectAId, run.id, { env, blobStore, now: Date.UTC(2026, 0, 5) });
+
+    // The user edits the scene's prompt while the node (still generating for
+    // the OLD prompt) is in flight.
+    await saveCreatorStoryboard(owner, projectAId, {
+        storyboard: {
+            scenes: [{ id: 'scene-1', title: 'Opening', prompt: 'night skyline instead', aspectRatio: '16:9' }],
+        },
+    }, { env, blobStore, now: Date.UTC(2026, 0, 6) });
+
+    const finished = await advanceWorkflowRun(owner, projectAId, run.id, { env, blobStore, fetchImpl, now: Date.UTC(2026, 0, 7) });
+    assert.equal(finished.run.nodes[0].status, 'completed');
+
+    // The scene must NOT be overwritten with output generated for the
+    // now-stale "sunrise" prompt -- the user's "night skyline" edit survives
+    // untouched rather than being silently reverted to "ready" with old media.
+    const scene = finished.project.storyboard.scenes.find((item) => item.id === 'scene-1');
+    assert.equal(scene.prompt, 'night skyline instead');
+    assert.equal(scene.imageUrl, '', 'the stale generation must not be written into the edited scene');
+    assert.equal(scene.status, 'draft');
+
+    // The generated asset is still registered -- just not auto-linked to a
+    // scene that has since moved on to a different prompt.
+    assert.equal(finished.project.assets.length, 1);
+    assert.equal(finished.project.assets[0].url, finished.run.nodes[0].outputUrl);
+});
+
 test('a Storyboard with more scenes than a run supports is rejected, never silently truncated', async () => {
     const blobStore = creatorProjectStoreForTests(new Map());
     await setupProject(projectAId, owner, blobStore);

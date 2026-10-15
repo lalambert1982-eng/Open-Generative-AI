@@ -14,6 +14,7 @@ import {
     listCreatorProjects,
     mutateCreatorProject,
     renameCreatorProject,
+    saveCreatorConversation,
     saveCreatorStoryboard,
 } from '../../src/lib/creatorProjectStore.js';
 import { resetRateLimitStore } from '../../src/lib/rateLimit.js';
@@ -335,4 +336,60 @@ test('two concurrent mutateCreatorProject calls on the same Project never both p
     const final = await getCreatorProject(owner, projectId, { env, blobStore });
     assert.equal(final.name, 'Serialized Project-A-B');
     assert.equal(final.revision, 3);
+});
+
+test('two concurrent legacy mutations that both pass the revision check still cannot silently lose an update, thanks to Blob ifMatch', async () => {
+    const records = new Map();
+    const blobStore = creatorProjectStoreForTests(records);
+    await createCreatorProject(owner, { name: 'Race Project' }, {
+        env, blobStore, idGenerator: () => projectId, now: Date.UTC(2026, 0, 1),
+    });
+
+    // renameCreatorProject and saveCreatorConversation are both legacy
+    // mutations that deliberately do NOT share mutateCreatorProject's
+    // per-process queue (see creatorProjectStore.js) — a stand-in for two
+    // separate serverless instances, which no in-process queue could
+    // coordinate anyway. Pause A right after ITS OWN re-read inside
+    // commitProjectPatch (the second get() call) completes — at that point
+    // A has already captured "current revision 1" in memory, exactly like a
+    // second real instance's re-read could race B's and land before B's
+    // write. B then runs to completion first. When A resumes, its stale
+    // in-memory revision check will wrongly pass (it never re-fetches) —
+    // only the ifMatch on the actual write can still catch this.
+    let releaseA;
+    let settledA;
+    const aRecheckStarted = new Promise((resolve) => {
+        let readCount = 0;
+        const pausingBlobStore = {
+            ...blobStore,
+            async get(...args) {
+                const result = await blobStore.get(...args);
+                readCount += 1;
+                if (readCount === 2) {
+                    resolve();
+                    await new Promise((release) => { releaseA = release; });
+                }
+                return result;
+            },
+        };
+        settledA = renameCreatorProject(owner, projectId, { name: 'Renamed by A' }, {
+            env, blobStore: pausingBlobStore, now: Date.UTC(2026, 0, 2),
+        }).then((value) => ({ ok: true, value }), (error) => ({ ok: false, error }));
+    });
+    await aRecheckStarted;
+
+    const b = await saveCreatorConversation(owner, projectId, {
+        conversation: { messages: [{ role: 'user', text: 'from B' }] },
+    }, { env, blobStore, now: Date.UTC(2026, 0, 3) });
+    assert.equal(b.conversation.messages.length, 1);
+
+    releaseA();
+    const resultA = await settledA;
+    assert.equal(resultA.ok, false, "A's stale re-read passed its own revision check, but ifMatch on the write must still catch B's already-committed change");
+    assert.ok(resultA.error instanceof CreatorProjectError);
+    assert.equal(resultA.error.code, 'project_conflict');
+
+    const final = await getCreatorProject(owner, projectId, { env, blobStore });
+    assert.equal(final.name, 'Race Project', "A's rename must not have landed");
+    assert.equal(final.conversation.messages.length, 1, "B's conversation write must have survived");
 });
